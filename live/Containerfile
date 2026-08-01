@@ -21,6 +21,8 @@ ARG TARGET=dudley-os
 ARG TAG=stable
 # REGISTRY selects the OCI registry org.
 ARG REGISTRY=joshyorko
+# INSTALLER_VARIANT selects the matching Dudley installer catalog.
+ARG INSTALLER_VARIANT=dudley-dakota
 
 # ── Stage 1: Reference image (kernel modules source) ─────────────────────────
 FROM ghcr.io/${REGISTRY}/${TARGET}:${TAG} AS ref
@@ -99,8 +101,9 @@ ARG TARGET=dudley-os
 ARG TAG=dakota-nvidia
 ARG REGISTRY=joshyorko
 ARG INSTALLER_CHANNEL=stable
+ARG INSTALLER_VARIANT=dudley-dakota
 ARG DEBUG=0
-ENV TARGET=${TARGET} INSTALLER_CHANNEL=${INSTALLER_CHANNEL} DEBUG=${DEBUG}
+ENV TARGET=${TARGET} INSTALLER_CHANNEL=${INSTALLER_CHANNEL} INSTALLER_VARIANT=${INSTALLER_VARIANT} DEBUG=${DEBUG}
 
 # For ostree-based images (bluefin, bluefin-lts): install systemd-boot and
 # fuse-overlayfs with dnf so the live system remains a valid bootc deployment

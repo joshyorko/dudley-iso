@@ -5,14 +5,14 @@ installable container images; `dudley-factory` is unrelated to this build path.
 
 ## Product contract
 
-- Build target: `dudley`
-- Normal payload: `ghcr.io/joshyorko/dudley-os:dakota`
-- NVIDIA/live payload: `ghcr.io/joshyorko/dudley-os:dakota-nvidia`
-- Output: `output/dudley-live.iso`
-- User command: `just iso-sd-boot dudley`
-- Filesystem: btrfs
-- Bootloader: systemd-boot
-- Composefs: enabled
+| Family | Standard payload | NVIDIA/live payload | Bootloader | Composefs | Command |
+| --- | --- | --- | --- | --- | --- |
+| Dakota | `dudley-os:dakota` | `dudley-os:dakota-nvidia` | systemd-boot | enabled | `just iso dakota` |
+| Bluefin | `dudley-os:stable` | `dudley-os:nvidia` | GRUB2 | disabled | `just iso bluefin` |
+
+Both families default to btrfs and automatically select the standard or NVIDIA
+installed image. `just iso` defaults to Dakota. Outputs are
+`output/dudley-dakota-live.iso` and `output/dudley-bluefin-live.iso`.
 
 Project Bluefin may appear only as an upstream technical dependency or explicit
 attribution. User-facing identity, examples, workflow names, and releases must
@@ -33,8 +33,9 @@ be Dudley-owned.
 
 - Use Conventional Commits.
 - Push product work only to `joshyorko/dudley-iso`.
-- Keep unrelated upstream variants, release machinery, and automatic syncs out
-  of this repo. Upstream changes enter only through deliberate manual ports.
+- Keep unrelated upstream product targets, release machinery, and automatic
+  syncs out of this repo. Upstream changes enter only through deliberate manual
+  ports.
 
 ## Host behavior
 

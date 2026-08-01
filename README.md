@@ -1,31 +1,34 @@
 # dudley-iso
 
-`dudley-iso` builds Dudley's bootable, offline installer ISO.
+`dudley-iso` builds Dudley's bootable, offline installer ISOs for the Dakota
+and Bluefin image families.
 
-The live environment boots the Dudley Dakota NVIDIA image so the installer
-works on NVIDIA and non-NVIDIA hardware. The embedded catalog selects
-`ghcr.io/joshyorko/dudley-os:dakota` on standard hardware and
-`ghcr.io/joshyorko/dudley-os:dakota-nvidia` when NVIDIA support is required.
+Each ISO boots its family's Dudley NVIDIA image so the installer works on
+NVIDIA and non-NVIDIA hardware. The embedded catalog then selects the standard
+or NVIDIA installable image for the detected hardware.
+
+| ISO family | Standard image | NVIDIA/live image | Output |
+| --- | --- | --- | --- |
+| Dakota | `dudley-os:dakota` | `dudley-os:dakota-nvidia` | `output/dudley-dakota-live.iso` |
+| Bluefin | `dudley-os:stable` | `dudley-os:nvidia` | `output/dudley-bluefin-live.iso` |
 
 ## Build
 
 Run this from the repository root on the Bluefin host:
 
 ```zsh
-just iso-sd-boot dudley
+just iso dakota
+just iso bluefin
 ```
 
-The build needs Podman, Buildah, Skopeo, `mksquashfs`, `xorriso`, systemd-boot
-tools, and approximately 22 GB of free disk space. It writes:
-
-```text
-output/dudley-live.iso
-```
+`just iso` defaults to Dakota. The build needs Podman, Buildah, Skopeo,
+`mksquashfs`, `xorriso`, systemd-boot tools, and approximately 22 GB of free
+disk space per build.
 
 Use another filesystem when the repository does not have enough space:
 
 ```zsh
-just output_dir=/var/mnt/dudley-iso iso-sd-boot dudley
+just output_dir=/var/mnt/dudley-iso iso bluefin
 ```
 
 ## Verification
@@ -43,7 +46,8 @@ that complete path has passed.
 
 ## Repository ownership
 
-- `dudley-os` publishes the two installable Dakota container images.
+- `dudley-os` publishes the Dakota, Dakota NVIDIA, stable Bluefin, and Bluefin
+  NVIDIA container images.
 - `dudley-iso` owns live-media assembly, the offline store, installer identity,
   and ISO verification.
 - `dudley-factory` is a separate BuildStream experiment and is not used here.
@@ -52,6 +56,6 @@ that complete path has passed.
 
 The ISO assembly implementation originated in
 [`projectbluefin/dakota-iso`](https://github.com/projectbluefin/dakota-iso).
-Project Bluefin remains the source of Dudley's Dakota base images and installer
-components. Dudley-specific product language, targets, workflows, and release
-ownership live in this repository.
+Project Bluefin remains the source of Dudley's Dakota and Bluefin base images
+and installer components. Dudley-specific product language, targets, workflows,
+and release ownership live in this repository.

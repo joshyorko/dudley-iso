@@ -362,11 +362,11 @@ install -Dm644 "$SCRIPT_DIR/images/dudley-raptor.png" /usr/share/bootc-installer
 #   recipe.json — distro branding, tour slides, install steps, and the
 #                 local_imgref for offline installation
 #
-# TARGET controls which OCI image is embedded in this squashfs's VFS
+# TARGET controls which OCI repository is embedded in this squashfs's VFS
 # containers-storage and therefore available for offline install.  The live
 # environment is always the NVIDIA variant (safe for all hardware).
 #
-# Per-variant config is read from /tmp/src/<TARGET>/ (bind-mounted from the
+# Per-variant config is read from /tmp/src/<INSTALLER_VARIANT>/ (bind-mounted from the
 # build context at container build time) when present, with sensible defaults
 # for dakota.  Each variant directory may contain:
 #   base_imgref      — base (non-nvidia) image ref written as imgref
@@ -376,10 +376,9 @@ install -Dm644 "$SCRIPT_DIR/images/dudley-raptor.png" /usr/share/bootc-installer
 #   flatpak_var_path — flatpak data path inside target (default: state/os/default/var/lib/flatpak)
 #   images_json      — variant-specific images.json (optional, overrides live/src/etc/bootc-installer/images.json)
 TARGET="${TARGET:-dudley-os}"
+INSTALLER_VARIANT="${INSTALLER_VARIANT:-dudley-dakota}"
 
-# Derive variant name by stripping the -nvidia/-nvidia-open suffix
-VARIANT=$(echo "$TARGET" | sed 's/-nvidia-open$//;s/-nvidia$//')
-VARIANT_DIR="/tmp/src/${VARIANT}"
+VARIANT_DIR="/tmp/src/${INSTALLER_VARIANT}"
 
 # Read per-variant config with defaults
 if [[ -f "$VARIANT_DIR/base_imgref" ]]; then

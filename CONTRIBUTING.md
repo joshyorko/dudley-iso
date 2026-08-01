@@ -1,6 +1,6 @@
 # Contributing to dudley-iso
 
-Keep changes focused on Dudley's installer target and offline-install path.
+Keep changes focused on Dudley's installer targets and offline-install path.
 
 Before opening a pull request:
 
