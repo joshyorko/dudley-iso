@@ -1,0 +1,29 @@
+---
+name: Validate Dudley ISO
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install test dependencies
+        run: pip install pytest PyYAML jsonschema
+      - name: Validate justfile
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+      - name: Run static tests
+        run: |
+          just --list
+          pytest tests/ -q
+
+# ISO builds and install E2E remain local-only until Dudley's first completed
+# install and installed-system boot have been verified.

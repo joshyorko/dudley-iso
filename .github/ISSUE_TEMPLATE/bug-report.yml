@@ -1,0 +1,25 @@
+name: Bug report
+description: Report a Dudley ISO build, boot, or installation failure.
+labels: [bug]
+body:
+  - type: textarea
+    id: failure
+    attributes:
+      label: What failed?
+      description: Include the command, exact error, and whether failure occurred during build, live boot, install, or installed-system boot.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include host OS, filesystem, free space, Podman version, and relevant hardware.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste the smallest useful log excerpt or link an attached build log.
+    validations:
+      required: true

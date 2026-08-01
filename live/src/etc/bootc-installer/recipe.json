@@ -1,0 +1,29 @@
+{
+  "log_file": "/var/log/bootc-installer.log",
+  "distro_name": "Dudley",
+  "welcome_title": "Welcome to Dudley",
+  "distro_logo": "resource:///org/bootcinstaller/Installer/images/dakota.png",
+  "imgref": "ghcr.io/joshyorko/dudley-os:dakota",
+  "local_imgref": "containers-storage:ghcr.io/joshyorko/dudley-os:dakota-nvidia",
+  "bootloader": "systemd",
+  "composeFsBackend": true,
+  "filesystem": "btrfs",
+  "tour": {
+    "welcome": {
+      "image": "/run/host/usr/share/bootc-installer/images/dudley-raptor.png",
+      "title": "Welcome to Dudley",
+      "description": "Install Dudley from the embedded offline image."
+    },
+    "completed": {
+      "image": "/run/host/usr/share/bootc-installer/images/dudley-raptor.png",
+      "title": "Installation complete",
+      "description": "Reboot into Dudley."
+    }
+  },
+  "steps": {
+    "welcome": {"template": "welcome", "protected": true},
+    "image": {"template": "image", "protected": true},
+    "disk": {"template": "disk"},
+    "encryption": {"template": "encryption"}
+  }
+}

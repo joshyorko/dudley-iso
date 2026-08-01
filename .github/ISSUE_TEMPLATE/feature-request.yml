@@ -1,0 +1,18 @@
+name: Feature request
+description: Propose a focused Dudley installer improvement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the Dudley installer problem this solves.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Expected outcome
+      description: State the exact command or behavior that should exist when complete.
+    validations:
+      required: true
