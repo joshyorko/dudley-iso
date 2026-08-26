@@ -137,7 +137,7 @@ def test_one_command_interface_rejects_unknown_iso_family() -> None:
         text=True,
     )
     assert result.returncode != 0
-    assert "supported ISO families: dakota, bluefin" in result.stderr
+    assert "supported ISO families: dakota, bluefin, omarchy-quattro" in result.stderr
 
 
 @pytest.mark.parametrize("recipe", ["container", "iso-sd-boot"])

@@ -7,20 +7,32 @@ compression := "fast"
 default:
     @just --list
 
-# Build a Dudley offline installer ISO family (dakota or bluefin).
+# Build a Dudley offline installer ISO family (dakota or bluefin), or the
+# additive upstream Omarchy Quattro installer.
 iso family="dakota":
     #!/usr/bin/env bash
     set -euo pipefail
 
     case "{{ family }}" in
         dakota | bluefin) ;;
+        omarchy-quattro)
+            OUTPUT_DIR="{{ output_dir }}/omarchy-quattro" \
+                bash scripts/build-omarchy-quattro-iso.sh
+            exit 0
+            ;;
         *)
-            echo "ERROR: supported ISO families: dakota, bluefin" >&2
+            echo "ERROR: supported ISO families: dakota, bluefin, omarchy-quattro" >&2
             exit 2
             ;;
     esac
 
     just iso-sd-boot "dudley-{{ family }}"
+
+# Build the pinned upstream Omarchy installer with the Quattro bootc backend.
+# Requires OMARCHY_QUATTRO_IMAGE_REF=<registry/name@sha256:digest>.
+omarchy-quattro:
+    OUTPUT_DIR="{{ output_dir }}/omarchy-quattro" \
+        bash scripts/build-omarchy-quattro-iso.sh
 
 # Build a live installer container for a configured target.
 container target="dudley-dakota":

@@ -1,0 +1,68 @@
+diff --git a/bin/omarchy-iso-make b/bin/omarchy-iso-make
+index e8195b4..fcb5547 100755
+--- a/bin/omarchy-iso-make
++++ b/bin/omarchy-iso-make
+@@ -161 +172 @@ fi
+-docker run "${DOCKER_ARGS[@]}" archlinux/archlinux:latest /$BUILD_SCRIPT
++"${OMARCHY_CONTAINER_RUNTIME:-docker}" run "${DOCKER_ARGS[@]}" archlinux/archlinux:latest /$BUILD_SCRIPT
+@@ -137,0 +141,8 @@ DOCKER_ARGS=(
++if [[ -n ${OMARCHY_BOOTC_IMAGE_ARCHIVE:-} ]]; then
++  [[ -f $OMARCHY_BOOTC_IMAGE_ARCHIVE ]] || {
++    echo "Error: Quattro image archive not found at $OMARCHY_BOOTC_IMAGE_ARCHIVE" >&2
++    exit 1
++  }
++  DOCKER_ARGS+=(-v "$OMARCHY_BOOTC_IMAGE_ARCHIVE:/omarchy-bootc-image.oci.tar:ro")
++fi
++
+@@ -128,0 +129,3 @@ DOCKER_ARGS=(
++  -e "OMARCHY_INSTALL_BACKEND=${OMARCHY_INSTALL_BACKEND:-}"
++  -e "OMARCHY_BOOTC_IMAGE_REF=${OMARCHY_BOOTC_IMAGE_REF:-}"
++  -e "OMARCHY_BOOTC_TARGET_IMGREF=${OMARCHY_BOOTC_TARGET_IMGREF:-}"
+
+diff --git a/builder/build-iso.sh b/builder/build-iso.sh
+index db8daa2..77be3ac 100755
+--- a/builder/build-iso.sh
++++ b/builder/build-iso.sh
+@@ -67,0 +68,13 @@ mkdir -p "$build_cache_dir/airootfs/usr/share/omarchy-iso"
++if [[ ${OMARCHY_INSTALL_BACKEND:-} == "bootc" ]]; then
++  : "${OMARCHY_BOOTC_IMAGE_REF:?OMARCHY_BOOTC_IMAGE_REF is required for the bootc backend}"
++  : "${OMARCHY_BOOTC_TARGET_IMGREF:?OMARCHY_BOOTC_TARGET_IMGREF is required for the bootc backend}"
++  [[ -f /omarchy-bootc-image.oci.tar ]] || {
++    echo "ERROR: the Quattro OCI archive was not mounted" >&2
++    exit 1
++  }
++  install -D -m 0644 /omarchy-bootc-image.oci.tar \
++    "$build_cache_dir/airootfs/var/cache/omarchy/bootc/quattro.oci.tar"
++  printf '%s\n' bootc >"$build_cache_dir/airootfs/root/omarchy_install_backend"
++  printf '%s\n' "$OMARCHY_BOOTC_IMAGE_REF" >"$build_cache_dir/airootfs/root/omarchy_bootc_image_ref"
++  printf '%s\n' "$OMARCHY_BOOTC_TARGET_IMGREF" >"$build_cache_dir/airootfs/root/omarchy_bootc_target_imgref"
++fi
+@@ -121,0 +135,4 @@ arch_packages=(linux-t2 git gum jq openssl plymouth ttfx tzupdate omarchy-keyrin
++if [[ ${OMARCHY_INSTALL_BACKEND:-} == "bootc" ]]; then
++  # The live installer runs the target OCI's bootc through rootful Podman.
++  arch_packages+=(podman btrfs-progs)
++fi
+
+diff --git a/configs/airootfs/root/.automated_script.sh b/configs/airootfs/root/.automated_script.sh
+index 16904f8..67ef9f4 100644
+--- a/configs/airootfs/root/.automated_script.sh
++++ b/configs/airootfs/root/.automated_script.sh
+@@ -26,0 +27,6 @@ export OMARCHY_INSTALL_LOG_FILE=/var/log/omarchy-install.log
++if [[ -f /root/omarchy_install_backend ]]; then
++  export OMARCHY_INSTALL_BACKEND="$(< /root/omarchy_install_backend)"
++  export OMARCHY_BOOTC_IMAGE_REF="$(< /root/omarchy_bootc_image_ref)"
++  export OMARCHY_BOOTC_TARGET_IMGREF="$(< /root/omarchy_bootc_target_imgref)"
++  export OMARCHY_BOOTC_IMAGE_ARCHIVE=/var/cache/omarchy/bootc/quattro.oci.tar
++fi
+
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
+index 9b6ebf5..72393b0 100644
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
+@@ -12,0 +13 @@ from __future__ import annotations
++import os
+@@ -30,0 +32,4 @@ def build_phases(ctx: InstallContext):
++    if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":
++        from .bootc_backend import build_phases as build_bootc_phases
++        return build_bootc_phases(ctx)
++
