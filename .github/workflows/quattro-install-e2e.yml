@@ -10,26 +10,61 @@ permissions:
   contents: read
 
 jobs:
+  pinned-upstream-unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Dudley contracts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Run pinned upstream fast tests
+        run: |
+          upstream="$RUNNER_TEMP/omarchy-iso"
+          git clone --filter=blob:none --branch quattro --single-branch --no-checkout \
+            "$(cat omarchy-quattro/upstream_url)" "$upstream"
+          git -C "$upstream" checkout --detach "$(cat omarchy-quattro/upstream_revision)"
+          git -C "$upstream" submodule update --init --recursive
+          cd "$upstream"
+          ./test/all
+
+  accepted-image-input:
+    runs-on: ubuntu-24.04
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check accepted OS image input
+        id: check
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+          config = json.loads(Path("omarchy-quattro/image.json").read_text())
+          accepted = config["accepted_source_ref"]
+          if not accepted:
+              print("Quattro ISO build and VM install skipped: accepted OS digest is not yet reviewed.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write("ready=false\n")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  summary.write("Quattro ISO build and VM install skipped: accepted OS digest is not yet reviewed.\n")
+              raise SystemExit(0)
+          if not re.fullmatch(r"ghcr\.io/joshyorko/omarchy-bootc@sha256:[0-9a-f]{64}", accepted):
+              raise SystemExit("accepted_source_ref must be an exact ghcr.io digest")
+          if not config["accepted_signer_identity"] or not config["accepted_signer_oidc_issuer"]:
+              raise SystemExit("keyless signer identity and issuer must be configured")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("ready=true\n")
+          PY
+
   build-and-install:
+    needs: [accepted-image-input, pinned-upstream-unit]
+    if: needs.accepted-image-input.outputs.ready == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Check accepted OS image input
-        run: |
-          python3 - <<'PY'
-          import json
-          import re
-          from pathlib import Path
-          config = json.loads(Path("omarchy-quattro/image.json").read_text())
-          accepted = config["accepted_source_ref"]
-          if not re.fullmatch(r"ghcr\.io/joshyorko/omarchy-bootc@sha256:[0-9a-f]{64}", accepted):
-              raise SystemExit("accepted_source_ref must be filled with the reviewed OS digest before this workflow can build")
-          if not config["accepted_signer_identity"] or not config["accepted_signer_oidc_issuer"]:
-              raise SystemExit("keyless signer identity and issuer must be configured")
-          PY
 
       - name: Install ISO build and VM dependencies
         run: |
@@ -45,6 +80,29 @@ jobs:
 
       - name: Build offline Quattro ISO
         run: just iso omarchy-quattro
+
+      - name: Verify and record build receipts
+        run: |
+          sha256sum --check output/omarchy-quattro/omarchy-quattro.iso.sha256
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          image = json.loads(Path("omarchy-quattro/image.json").read_text())
+          receipt = json.loads(Path("output/omarchy-quattro/omarchy-quattro.image-signature.json").read_text())
+          expected = {
+              "source_ref": image["accepted_source_ref"],
+              "source_digest": image["accepted_source_ref"].rsplit("@", 1)[1],
+              "certificate_identity": image["accepted_signer_identity"],
+              "certificate_oidc_issuer": image["accepted_signer_oidc_issuer"],
+          }
+          if any(receipt.get(key) != value for key, value in expected.items()):
+              raise SystemExit("retained image signature receipt differs from accepted build inputs")
+          if not isinstance(receipt.get("verified_signatures"), list) or not receipt["verified_signatures"]:
+              raise SystemExit("retained image signature receipt contains no verified signature")
+          PY
+          sha256sum output/omarchy-quattro/omarchy-quattro.image-signature.json
+          echo "Image signature receipt SHA-256:" >> "$GITHUB_STEP_SUMMARY"
+          sha256sum output/omarchy-quattro/omarchy-quattro.image-signature.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Prepare upstream VM install harness
         run: |

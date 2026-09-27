@@ -1,6 +1,7 @@
 """Contract tests for the isolated Quattro installer build."""
 
 import json
+import importlib.util
 import subprocess
 from pathlib import Path
 
@@ -20,6 +21,12 @@ from scripts.native_finalize import finalize_native_filesystem
 
 
 REPO = Path(__file__).parents[1]
+CONTRACT_SPEC = importlib.util.spec_from_file_location(
+    "quattro_native_contract", REPO / "omarchy-quattro/native_contract.py"
+)
+assert CONTRACT_SPEC and CONTRACT_SPEC.loader
+NATIVE_CONTRACT = importlib.util.module_from_spec(CONTRACT_SPEC)
+CONTRACT_SPEC.loader.exec_module(NATIVE_CONTRACT)
 
 
 def test_image_config_separates_embedded_digest_from_future_tracking_ref() -> None:
@@ -44,6 +51,15 @@ def test_upstream_pin_is_current_live_quattro_revision() -> None:
     assert "bin/omarchy-iso-make" in patch
     assert "builder/build-iso.sh" in patch
     assert "OMARCHY_INSTALL_BACKEND" in patch
+    workflow = (REPO / ".github/workflows/quattro-install-e2e.yml").read_text()
+    assert "pinned-upstream-unit" in workflow
+    assert "./test/all" in workflow
+    assert "needs.accepted-image-input.outputs.ready == 'true'" in workflow
+    assert "Verify and record build receipts" in workflow
+    assert "sha256sum --check output/omarchy-quattro/omarchy-quattro.iso.sha256" in workflow
+    assert "--install-only --no-preview" in workflow
+    assert "--encrypt" not in workflow
+    assert "--provision" not in workflow
 
 
 def test_builder_uses_fixed_output_paths_and_no_external_values() -> None:
@@ -115,6 +131,34 @@ def test_backend_uses_native_composefs_without_ostree_or_bootc_finalize() -> Non
         '("Preparing live environment", prepare_live)'
     )
     assert 'fields[1] == "/"' in backend or 'fields[1] == \'/\'' in backend
+
+
+def test_native_contract_rejects_encryption_before_live_preparation() -> None:
+    class Context:
+        state = {}
+        encrypt = False
+        user_configuration = {"disk_config": {"disk_encryption": {"encryption_type": "luks"}}}
+
+    with pytest.raises(RuntimeError, match="encrypted Quattro installs are not supported"):
+        NATIVE_CONTRACT.validate_native_install_contract(Context())
+
+    backend = (REPO / "omarchy-quattro/bootc_backend.py").read_text()
+    assert backend.index('("Checking native installer support", validate_native_install_contract)') < backend.index(
+        '("Preparing live environment", prepare_live)'
+    )
+
+
+def test_native_contract_allows_unencrypted_deferred_provisioning() -> None:
+    class Context:
+        state = {}
+        encrypt = False
+        defer_provisioning = True
+        user_configuration = {"disk_config": {"disk_encryption": {"encryption_type": "no_encryption"}}}
+
+    NATIVE_CONTRACT.validate_native_install_contract(Context())
+    backend = (REPO / "omarchy-quattro/bootc_backend.py").read_text()
+    assert "_validate_provisioning_state(ctx)" in backend
+    assert "if ctx.defer_provisioning:" in backend
 
 
 def test_native_filesystem_finalization_orders_fstrim_readonly_and_freeze(tmp_path: Path) -> None:

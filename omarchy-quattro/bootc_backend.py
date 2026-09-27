@@ -19,6 +19,7 @@ from pathlib import Path
 from . import archinstall_adapter as arch
 from .context import InstallContext
 from .native_finalize import finalize_native_filesystem as _finalize_native_filesystem
+from .native_contract import validate_native_install_contract
 from .phases_impl import (
     configure_dns_resolver,
     configure_login,
@@ -30,6 +31,7 @@ from .phases_impl import (
     _run_target_setup_command,
     stage_provisioning_state,
     _write_pre_mounted_fstab,
+    _validate_provisioning_state,
 )
 from .ui import info
 
@@ -199,6 +201,10 @@ def _install_system(ctx: InstallContext) -> None:
 
 
 def _validate_boot(ctx: InstallContext) -> None:
+    if ctx.defer_provisioning:
+        # Reuse the pinned upstream contract so a missing service, pending
+        # marker, or owner provisioning payload cannot be reported as success.
+        _validate_provisioning_state(ctx)
     boot = _sysroot_path(ctx, "boot")
     if not boot.is_dir():
         raise RuntimeError(f"bootc did not create a boot directory under {ctx.target}")
@@ -219,6 +225,7 @@ def build_phases(ctx: InstallContext):
     """Use upstream UX and configurator with a native composefs system backend."""
     return [
         ("Verifying embedded Quattro image", verify_embedded_image),
+        ("Checking native installer support", validate_native_install_contract),
         ("Preparing live environment", prepare_live),
         ("Preparing install target", prepare_install_target),
         ("Installing Arch + Omarchy", _install_system),

@@ -51,7 +51,8 @@ physical sysroot read-only, then `fsfreeze` when supported.
 | --- | --- |
 | User, password, sudo | Upstream archinstall account writers under physical sysroot `/etc` and `/home`; deferred installs strip accounts and use first-boot state under `/var` |
 | Timezone and time sync | archinstall writes timezone state below sysroot `/etc` and enables the target time service |
-| Partitioning and encryption | Upstream configurator and archinstall filesystem handler; bootc receives the resulting mounted physical sysroot |
+| Partitioning | Upstream configurator and archinstall filesystem handler; bootc receives the resulting mounted physical sysroot |
+| Encryption | Rejected before live preparation or disk mutation; native systemd-boot unlock is not implemented, and upstream deferred-encryption hooks target Limine/mkinitcpio |
 | Root filesystem table | archinstall writes `/etc/fstab`; adapter removes the `/` row and keeps other mounts |
 | Network and DNS | Image NetworkManager DHCP defaults; upstream helper writes `/etc/resolv.conf` as the systemd-resolved symlink |
 | SSH | Upstream optional `authorized_keys` setup uses sysroot `/home`, `/etc`, and `/var` |
@@ -62,4 +63,11 @@ physical sysroot read-only, then `fsfreeze` when supported.
 
 This is a static contract only; no physical-disk installation or installed VM
 boot is claimed. The accepted OS digest remains a post-merge input. Gate 6
-requires that digest plus fresh VM evidence.
+requires that digest plus fresh VM evidence. Once the digest is populated, the
+Quattro workflow builds the ISO and runs an unencrypted QEMU installation; while
+the digest is blank it reports that gate as skipped. CI also runs the pinned
+upstream VM-free suite, which includes CIDATA autoinstall-loading tests; those
+do not constitute a native Quattro CIDATA install. CI does not exercise
+encrypted installs, which are rejected, or deferred first-boot provisioning;
+the adapter checks the upstream pending-service and owner-payload contract when
+deferred provisioning is selected.

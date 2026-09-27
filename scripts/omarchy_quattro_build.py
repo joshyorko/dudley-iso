@@ -115,6 +115,10 @@ def build() -> tuple[Path, Path]:
             REPO / "omarchy-quattro/native_finalize.py",
             overlay.with_name("native_finalize.py"),
         )
+        shutil.copy2(
+            REPO / "omarchy-quattro/native_contract.py",
+            overlay.with_name("native_contract.py"),
+        )
         _run(["git", "diff", "--check"], cwd=source_dir)
 
         archive = temporary_dir / "omarchy-quattro-image.oci.tar"
