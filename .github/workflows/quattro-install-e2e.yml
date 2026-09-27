@@ -58,7 +58,20 @@ jobs:
           fi
           EOF
           chmod 0755 "$testbin/systemd-firstboot"
-          PATH="$testbin:$PATH" ./test/all
+          # Keep the upstream fast-suite ordering while making the Python
+          # discovery root explicit.  Some hosted clones omit the empty
+          # package marker, which makes unittest reject test/unit as a start
+          # directory even though the checked-out suite is otherwise intact.
+          if [[ ! -e "$upstream/test/unit/__init__.py" ]]; then
+            : >"$upstream/test/unit/__init__.py"
+          fi
+          for test in "$upstream"/test/unit/*-test.sh; do
+            printf '==> %s\n' "${test#$upstream/}"
+            bash "$test"
+          done
+          printf '==> test/unit/test_*.py\n'
+          PATH="$testbin:$PATH" python3 -m unittest discover \
+            -t "$upstream" -s "$upstream/test/unit"
 
   accepted-image-input:
     runs-on: ubuntu-24.04
