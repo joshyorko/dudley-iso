@@ -18,6 +18,7 @@ IMAGE_CONFIG = REPO / "omarchy-quattro/image.json"
 OUTPUT_DIR = REPO / "output/omarchy-quattro"
 OUTPUT_ISO = OUTPUT_DIR / "omarchy-quattro.iso"
 OUTPUT_SHA256 = OUTPUT_DIR / "omarchy-quattro.iso.sha256"
+OUTPUT_SIGNATURE = OUTPUT_DIR / "omarchy-quattro.image-signature.json"
 UPSTREAM_URL = (REPO / "omarchy-quattro/upstream_url").read_text().strip()
 UPSTREAM_REVISION = (REPO / "omarchy-quattro/upstream_revision").read_text().strip()
 IMAGE_NAME = "ghcr.io/joshyorko/omarchy-bootc"
@@ -82,11 +83,17 @@ def build() -> tuple[Path, Path]:
     # Authentication and content identity are checked before creating output
     # or performing the destructive destination-disk operations in the ISO.
     signature = subprocess.run(
-        ["cosign", "verify", "--certificate-identity", identity,
+        ["cosign", "verify", "--output", "json", "--certificate-identity", identity,
          "--certificate-oidc-issuer", issuer, source_ref],
         text=True, capture_output=True, check=False,
     )
     verify_signer_status(signature.returncode, signature.stderr or signature.stdout)
+    try:
+        verified_signatures = json.loads(signature.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("image signer verification returned malformed JSON") from exc
+    if not isinstance(verified_signatures, list) or not verified_signatures:
+        raise ValueError("image signer verification returned no signature")
     _run(["podman", "pull", source_ref])
     actual_digest = _run(
         ["podman", "image", "inspect", source_ref, "--format", "{{.Digest}}"], capture=True
@@ -117,6 +124,15 @@ def build() -> tuple[Path, Path]:
         checksum_file = temporary_dir / "omarchy-quattro-image.oci.tar.sha256"
         checksum_file.write_text(hashlib.sha256(archive.read_bytes()).hexdigest() + "  " + archive.name + "\n")
         verify_archive(archive, checksum_file)
+        signature_receipt = temporary_dir / "omarchy-quattro-image.signature.json"
+        signature_receipt.write_text(json.dumps({
+            "schema": "omarchy-bootc.image-signature/v1",
+            "source_ref": source_ref,
+            "source_digest": digest,
+            "certificate_identity": identity,
+            "certificate_oidc_issuer": issuer,
+            "verified_signatures": verified_signatures,
+        }, indent=2, sort_keys=True) + "\n")
 
         env = os.environ.copy()
         env.update({
@@ -125,6 +141,7 @@ def build() -> tuple[Path, Path]:
             "OMARCHY_BOOTC_IMAGE_REF": source_ref,
             "OMARCHY_BOOTC_TARGET_IMGREF": config["tracking_ref"],
             "OMARCHY_BOOTC_IMAGE_ARCHIVE": str(archive),
+            "OMARCHY_BOOTC_IMAGE_SIGNATURE_RECEIPT": str(signature_receipt),
             "OMARCHY_ISO_REF": "quattro",
             "OMARCHY_MIRROR": "stable",
         })
@@ -139,8 +156,11 @@ def build() -> tuple[Path, Path]:
         shutil.copy2(candidates[-1], staged_iso)
         checksum = hashlib.sha256(staged_iso.read_bytes()).hexdigest()
         staged_checksum.write_text(f"{checksum}  {OUTPUT_ISO.name}\n")
+        staged_signature = temporary_dir / OUTPUT_SIGNATURE.name
+        shutil.copy2(signature_receipt, staged_signature)
         os.replace(staged_iso, OUTPUT_ISO)
         os.replace(staged_checksum, OUTPUT_SHA256)
+        os.replace(staged_signature, OUTPUT_SIGNATURE)
     return OUTPUT_ISO, OUTPUT_SHA256
 
 
@@ -152,6 +172,7 @@ def main() -> int:
         return 1
     print(iso)
     print(checksum)
+    print(OUTPUT_SIGNATURE)
     return 0
 
 

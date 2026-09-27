@@ -1,6 +1,9 @@
 name: Quattro ISO and VM install
 
 on:
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -72,4 +75,5 @@ jobs:
           path: |
             output/omarchy-quattro/omarchy-quattro.iso
             output/omarchy-quattro/omarchy-quattro.iso.sha256
+            output/omarchy-quattro/omarchy-quattro.image-signature.json
             output/omarchy-quattro/upstream-harness/test-runs/**

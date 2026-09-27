@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -41,12 +42,13 @@ TRACKING_REF = os.environ.get("OMARCHY_BOOTC_TARGET_IMGREF", "").strip()
 IMAGE_REF_FILE = Path("/root/omarchy_bootc_image_ref")
 TRACKING_REF_FILE = Path("/root/omarchy_bootc_target_imgref")
 ARCHIVE_CHECKSUM = EMBEDDED_ARCHIVE.with_suffix(EMBEDDED_ARCHIVE.suffix + ".sha256")
+SIGNATURE_RECEIPT = EMBEDDED_ARCHIVE.with_suffix(EMBEDDED_ARCHIVE.suffix + ".signature.json")
 
 
 def verify_embedded_image(ctx: InstallContext) -> None:
     """Verify archive integrity and exact accepted digest before disk mutation."""
-    if not EMBEDDED_ARCHIVE.is_file() or not ARCHIVE_CHECKSUM.is_file():
-        raise RuntimeError("embedded Quattro image archive or checksum receipt is missing")
+    if not EMBEDDED_ARCHIVE.is_file() or not ARCHIVE_CHECKSUM.is_file() or not SIGNATURE_RECEIPT.is_file():
+        raise RuntimeError("embedded Quattro image archive, checksum, or signature receipt is missing")
     source_ref = IMAGE_REF_FILE.read_text().strip()
     match = re.fullmatch(r"ghcr\.io/joshyorko/omarchy-bootc@(sha256:[0-9a-f]{64})", source_ref)
     if not match:
@@ -55,6 +57,20 @@ def verify_embedded_image(ctx: InstallContext) -> None:
         raise RuntimeError("embedded tracking ref does not match the separately configured target ref")
     if TRACKING_REF != "ghcr.io/joshyorko/omarchy-bootc:testing":
         raise RuntimeError("installed OS tracking ref must be ghcr.io/joshyorko/omarchy-bootc:testing")
+    try:
+        signature = json.loads(SIGNATURE_RECEIPT.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("embedded image signature receipt is malformed") from exc
+    if (
+        signature.get("schema") != "omarchy-bootc.image-signature/v1"
+        or signature.get("source_ref") != source_ref
+        or signature.get("source_digest") != match.group(1)
+        or signature.get("certificate_identity") != "https://github.com/joshyorko/omarchy-bootc/.github/workflows/build.yml@refs/heads/main"
+        or signature.get("certificate_oidc_issuer") != "https://token.actions.githubusercontent.com"
+        or not isinstance(signature.get("verified_signatures"), list)
+        or not signature["verified_signatures"]
+    ):
+        raise RuntimeError("embedded image signature receipt does not prove the accepted publisher")
     receipt = ARCHIVE_CHECKSUM.read_text().split()
     actual_archive_sha = hashlib.sha256(EMBEDDED_ARCHIVE.read_bytes()).hexdigest()
     if not receipt or receipt[0] != actual_archive_sha:

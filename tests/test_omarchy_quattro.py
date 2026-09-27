@@ -9,6 +9,7 @@ import pytest
 from scripts.omarchy_quattro_build import (
     IMAGE_CONFIG,
     OUTPUT_ISO,
+    OUTPUT_SIGNATURE,
     OUTPUT_SHA256,
     verify_archive,
     verify_image_config,
@@ -48,6 +49,7 @@ def test_upstream_pin_is_current_live_quattro_revision() -> None:
 def test_builder_uses_fixed_output_paths_and_no_external_values() -> None:
     assert OUTPUT_ISO == REPO / "output/omarchy-quattro/omarchy-quattro.iso"
     assert OUTPUT_SHA256 == REPO / "output/omarchy-quattro/omarchy-quattro.iso.sha256"
+    assert OUTPUT_SIGNATURE == REPO / "output/omarchy-quattro/omarchy-quattro.image-signature.json"
     result = subprocess.run(
         ["just", "--dry-run", "iso", "omarchy-quattro"],
         cwd=REPO,
@@ -106,6 +108,7 @@ def test_backend_uses_native_composefs_without_ostree_or_bootc_finalize() -> Non
     assert "--source-imgref" in backend
     assert "--target-imgref" in backend
     assert "--skip-fetch-check" in backend
+    assert "SIGNATURE_RECEIPT" in backend
     assert "ostree admin" not in backend.lower()
     assert "install finalize" not in backend
     assert backend.index('("Verifying embedded Quattro image", verify_embedded_image)') < backend.index(
