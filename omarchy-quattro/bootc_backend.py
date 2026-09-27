@@ -62,6 +62,8 @@ def verify_embedded_image(ctx: InstallContext) -> None:
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError("embedded image signature receipt is malformed") from exc
     if (
+        not isinstance(signature, dict)
+        or
         signature.get("schema") != "omarchy-bootc.image-signature/v1"
         or signature.get("source_ref") != source_ref
         or signature.get("source_digest") != match.group(1)
