@@ -53,7 +53,8 @@ def test_upstream_pin_is_current_live_quattro_revision() -> None:
     assert "OMARCHY_INSTALL_BACKEND" in patch
     workflow = (REPO / ".github/workflows/quattro-install-e2e.yml").read_text()
     assert "pinned-upstream-unit" in workflow
-    assert "./test/all" in workflow
+    assert 'for test in "$upstream"/test/unit/*-test.sh' in workflow
+    assert "unittest discover" in workflow
     assert "needs.accepted-image-input.outputs.ready == 'true'" in workflow
     assert "Verify and record build receipts" in workflow
     assert "sha256sum --check output/omarchy-quattro/omarchy-quattro.iso.sha256" in workflow
