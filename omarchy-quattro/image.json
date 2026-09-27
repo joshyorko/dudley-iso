@@ -1,0 +1,6 @@
+{
+  "accepted_source_ref": "",
+  "tracking_ref": "ghcr.io/joshyorko/omarchy-bootc:testing",
+  "accepted_signer_identity": "https://github.com/joshyorko/omarchy-bootc/.github/workflows/build.yml@refs/heads/main",
+  "accepted_signer_oidc_issuer": "https://token.actions.githubusercontent.com"
+}

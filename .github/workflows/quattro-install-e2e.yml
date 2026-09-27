@@ -1,0 +1,75 @@
+name: Quattro ISO and VM install
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check accepted OS image input
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+          config = json.loads(Path("omarchy-quattro/image.json").read_text())
+          accepted = config["accepted_source_ref"]
+          if not re.fullmatch(r"ghcr\.io/joshyorko/omarchy-bootc@sha256:[0-9a-f]{64}", accepted):
+              raise SystemExit("accepted_source_ref must be filled with the reviewed OS digest before this workflow can build")
+          if not config["accepted_signer_identity"] or not config["accepted_signer_oidc_issuer"]:
+              raise SystemExit("keyless signer identity and issuer must be configured")
+          PY
+
+      - name: Install ISO build and VM dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y golang-go podman qemu-system-x86 qemu-utils ovmf socat imagemagick tesseract-ocr tesseract-ocr-eng xorriso jq git
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install Cosign
+        run: go install github.com/sigstore/cosign/v2/cmd/cosign@v2.4.1
+
+      - name: Install just
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+
+      - name: Build offline Quattro ISO
+        run: just iso omarchy-quattro
+
+      - name: Prepare upstream VM install harness
+        run: |
+          mkdir -p output/omarchy-quattro/upstream-harness
+          git clone --filter=blob:none --branch quattro --single-branch --no-checkout \
+            "$(cat omarchy-quattro/upstream_url)" output/omarchy-quattro/upstream-harness
+          git -C output/omarchy-quattro/upstream-harness checkout --detach "$(cat omarchy-quattro/upstream_revision)"
+          sudo mkdir -p /usr/share/edk2/x64
+          sudo ln -sf /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/edk2/x64/OVMF_CODE.4m.fd
+          sudo ln -sf /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/edk2/x64/OVMF_VARS.4m.fd
+          harness=output/omarchy-quattro/upstream-harness/bin/omarchy-iso-test
+          sed -i \
+            's/omarchy-pkg-add qemu-full edk2-ovmf socat imagemagick tesseract tesseract-data-eng/sudo apt-get update \&\& sudo apt-get install -y qemu-system-x86 qemu-utils ovmf socat imagemagick tesseract-ocr tesseract-ocr-eng/' \
+            "$harness"
+          sed -i 's/-cpu host -enable-kvm -machine q35,accel=kvm/-cpu max -machine q35,accel=tcg,thread=multi/' "$harness"
+
+      - name: Install Quattro ISO into a QEMU VM
+        run: |
+          cd output/omarchy-quattro/upstream-harness
+          ./bin/omarchy-iso-test ../omarchy-quattro.iso --install-only --no-preview --timeout 14400
+
+      - name: Upload ISO, checksum, and VM evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: quattro-iso-vm-evidence
+          if-no-files-found: warn
+          path: |
+            output/omarchy-quattro/omarchy-quattro.iso
+            output/omarchy-quattro/omarchy-quattro.iso.sha256
+            output/omarchy-quattro/upstream-harness/test-runs/**

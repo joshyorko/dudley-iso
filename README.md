@@ -25,6 +25,22 @@ just iso bluefin
 `mksquashfs`, `xorriso`, systemd-boot tools, and approximately 22 GB of free
 disk space per build.
 
+Build Quattro through Omarchy's supported upstream installer UX:
+
+```zsh
+just iso omarchy-quattro
+```
+
+This writes `output/omarchy-quattro/omarchy-quattro.iso` and the adjacent
+`omarchy-quattro.iso.sha256`. The accepted source digest is held in
+`omarchy-quattro/image.json`; its repository-owned keyless signer policy is
+checked before build output is staged. The accepted digest is intentionally
+blank until the OS image is reviewed, and builds fail closed until it is set.
+The embedded source digest is separate from the installed OS tracking ref
+(`ghcr.io/joshyorko/omarchy-bootc:testing`), so offline installs remain
+independent of later tag movement.
+The Quattro build also requires `cosign` and rootless Podman.
+
 Use another filesystem when the repository does not have enough space:
 
 ```zsh
@@ -51,6 +67,7 @@ that complete path has passed.
 - `dudley-iso` owns live-media assembly, the offline store, installer identity,
   and ISO verification.
 - `dudley-factory` is a separate BuildStream experiment and is not used here.
+- Omarchy Quattro uses the pinned upstream ISO configurator and installer flow.
 
 ## Upstream foundation
 
