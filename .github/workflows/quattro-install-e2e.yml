@@ -58,12 +58,7 @@ jobs:
           fi
           EOF
           chmod 0755 "$testbin/systemd-firstboot"
-          for test in "$upstream"/test/unit/*-test.sh; do
-            printf '==> %s\n' "${test#$upstream/}"
-            bash "$test"
-          done
-          PATH="$testbin:$PATH" python3 -m unittest discover \
-            -t "$upstream" -s "$upstream/test/unit"
+          PATH="$testbin:$PATH" ./test/all
 
   accepted-image-input:
     runs-on: ubuntu-24.04
