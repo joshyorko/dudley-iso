@@ -9,6 +9,7 @@ bootc finalizer.
 
 from __future__ import annotations
 
+import base64
 import os
 import hashlib
 import json
@@ -75,6 +76,28 @@ def verify_embedded_image(ctx: InstallContext) -> None:
         or not signature["verified_signatures"]
     ):
         raise RuntimeError("embedded image signature receipt does not prove the accepted publisher")
+    attestations = signature.get("verified_attestations")
+    attestation_ok = False
+    if isinstance(attestations, list):
+        for entry in attestations:
+            if not isinstance(entry, dict) or not isinstance(entry.get("payload"), str):
+                continue
+            try:
+                statement = json.loads(base64.b64decode(entry["payload"], validate=True))
+            except (ValueError, json.JSONDecodeError):
+                continue
+            predicate = statement.get("predicate") if isinstance(statement, dict) else None
+            if (
+                isinstance(predicate, dict)
+                and predicate.get("schema") == "omarchy-bootc.published-image/v1"
+                and predicate.get("image") == source_ref.rsplit("@", 1)[0]
+                and predicate.get("oci_manifest_digest") == match.group(1)
+                and predicate.get("acceptance_overlay") == "not-applied"
+            ):
+                attestation_ok = True
+                break
+    if not attestation_ok:
+        raise RuntimeError("embedded image signature receipt does not prove the accepted attestation")
     receipt = ARCHIVE_CHECKSUM.read_text().split()
     actual_archive_sha = hashlib.sha256(EMBEDDED_ARCHIVE.read_bytes()).hexdigest()
     if not receipt or receipt[0] != actual_archive_sha:

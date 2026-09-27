@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import os
 import re
@@ -22,6 +23,7 @@ OUTPUT_SIGNATURE = OUTPUT_DIR / "omarchy-quattro.image-signature.json"
 UPSTREAM_URL = (REPO / "omarchy-quattro/upstream_url").read_text().strip()
 UPSTREAM_REVISION = (REPO / "omarchy-quattro/upstream_revision").read_text().strip()
 IMAGE_NAME = "ghcr.io/joshyorko/omarchy-bootc"
+ATTESTATION_TYPE = "https://omarchy.org/attestation/published-image-receipt/v1"
 PIN_RE = re.compile(rf"^{re.escape(IMAGE_NAME)}@sha256:[0-9a-f]{{64}}$")
 
 
@@ -51,6 +53,38 @@ def verify_archive(archive: Path, checksum_file: Path) -> None:
 def verify_signer_status(returncode: int, detail: str) -> None:
     if returncode:
         raise ValueError(f"image signer verification failed: {detail.strip()}")
+
+
+def verify_attestation_status(
+    returncode: int, detail: str, expected_ref: str, expected_digest: str
+) -> list[dict[str, object]]:
+    if returncode:
+        raise ValueError(f"image attestation verification failed: {detail.strip()}")
+    try:
+        attestations = json.loads(detail)
+    except json.JSONDecodeError as exc:
+        raise ValueError("image attestation verification returned malformed JSON") from exc
+    if not isinstance(attestations, list) or not attestations:
+        raise ValueError("image attestation verification returned no attestation")
+    expected_image = expected_ref.rsplit("@", 1)[0]
+    expected_digest_ref = expected_digest if expected_digest.startswith("sha256:") else f"sha256:{expected_digest}"
+    for entry in attestations:
+        if not isinstance(entry, dict) or not isinstance(entry.get("payload"), str):
+            continue
+        try:
+            statement = json.loads(base64.b64decode(entry["payload"], validate=True))
+        except (ValueError, json.JSONDecodeError):
+            continue
+        predicate = statement.get("predicate") if isinstance(statement, dict) else None
+        if (
+            isinstance(predicate, dict)
+            and predicate.get("schema") == "omarchy-bootc.published-image/v1"
+            and predicate.get("image") == expected_image
+            and predicate.get("oci_manifest_digest") == expected_digest_ref
+            and predicate.get("acceptance_overlay") == "not-applied"
+        ):
+            return attestations
+    raise ValueError("image attestation does not prove the accepted published artifact")
 
 
 def verify_pulled_digest(expected_digest: str, actual_digest: str) -> None:
@@ -94,6 +128,24 @@ def build() -> tuple[Path, Path]:
         raise ValueError("image signer verification returned malformed JSON") from exc
     if not isinstance(verified_signatures, list) or not verified_signatures:
         raise ValueError("image signer verification returned no signature")
+    attestation = subprocess.run(
+        [
+            "cosign", "verify-attestation", "--output", "json",
+            "--type", ATTESTATION_TYPE,
+            "--certificate-identity", identity,
+            "--certificate-oidc-issuer", issuer,
+            source_ref,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    verified_attestations = verify_attestation_status(
+        attestation.returncode,
+        attestation.stdout or attestation.stderr,
+        source_ref,
+        digest,
+    )
     _run(["podman", "pull", source_ref])
     actual_digest = _run(
         ["podman", "image", "inspect", source_ref, "--format", "{{.Digest}}"], capture=True
@@ -136,6 +188,7 @@ def build() -> tuple[Path, Path]:
             "certificate_identity": identity,
             "certificate_oidc_issuer": issuer,
             "verified_signatures": verified_signatures,
+            "verified_attestations": verified_attestations,
         }, indent=2, sort_keys=True) + "\n")
 
         env = os.environ.copy()
