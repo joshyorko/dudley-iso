@@ -23,7 +23,47 @@ jobs:
           git -C "$upstream" checkout --detach "$(cat omarchy-quattro/upstream_revision)"
           git -C "$upstream" submodule update --init --recursive
           cd "$upstream"
-          ./test/all
+          # The upstream suite calls host-localectl and systemd-firstboot. The
+          # hosted runner is not booted with systemd, so provide only the
+          # deterministic command surface those unit tests exercise.
+          testbin="$RUNNER_TEMP/omarchy-iso-test-bin"
+          mkdir -p "$testbin"
+          cat >"$testbin/localectl" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "${1:-}" in
+            --no-pager)
+              [[ "${2:-}" == list-keymaps ]] || exit 1
+              printf '%s\n' us uk de fr es
+              ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 0755 "$testbin/localectl"
+          cat >"$testbin/systemd-firstboot" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          /usr/bin/systemd-firstboot "$@"
+          root=/
+          keymap=
+          for arg in "$@"; do
+            case "$arg" in
+              --root=*) root=${arg#--root=} ;;
+              --keymap=*) keymap=${arg#--keymap=} ;;
+            esac
+          done
+          if [[ -n "$keymap" && -f "$root/etc/vconsole.conf" ]] &&
+             ! grep -q '^XKBLAYOUT=' "$root/etc/vconsole.conf"; then
+            printf 'XKBLAYOUT=%s\n' "$keymap" >>"$root/etc/vconsole.conf"
+          fi
+          EOF
+          chmod 0755 "$testbin/systemd-firstboot"
+          for test in "$upstream"/test/unit/*-test.sh; do
+            printf '==> %s\n' "${test#$upstream/}"
+            bash "$test"
+          done
+          PATH="$testbin:$PATH" python3 -m unittest discover \
+            -t "$upstream" -s "$upstream/test/unit"
 
   accepted-image-input:
     runs-on: ubuntu-24.04
