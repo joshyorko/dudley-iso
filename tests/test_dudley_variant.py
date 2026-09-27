@@ -94,7 +94,7 @@ def test_repository_contains_only_dudley_product_targets() -> None:
         assert not (REPO / retired).exists()
 
     workflows = sorted(path.name for path in (REPO / ".github/workflows").glob("*.yml"))
-    assert workflows == ["validate.yml"]
+    assert workflows == ["quattro-install-e2e.yml", "validate.yml"]
 
 
 def test_generated_media_uses_dudley_identity() -> None:
@@ -137,7 +137,7 @@ def test_one_command_interface_rejects_unknown_iso_family() -> None:
         text=True,
     )
     assert result.returncode != 0
-    assert "supported ISO families: dakota, bluefin" in result.stderr
+    assert "supported ISO families: dakota, bluefin, omarchy-quattro" in result.stderr
 
 
 @pytest.mark.parametrize("recipe", ["container", "iso-sd-boot"])
