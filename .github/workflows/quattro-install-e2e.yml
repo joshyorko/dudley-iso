@@ -62,9 +62,14 @@ jobs:
           # discovery root explicit.  Some hosted clones omit the empty
           # package marker, which makes unittest reject test/unit as a start
           # directory even though the checked-out suite is otherwise intact.
-          if [[ ! -e "$upstream/test/unit/__init__.py" ]]; then
-            : >"$upstream/test/unit/__init__.py"
-          fi
+          # Ubuntu ships a stdlib ``test`` package; make the checked-out
+          # upstream namespace an explicit package so discovery cannot import
+          # that unrelated module instead.
+          for package in "$upstream/test/__init__.py" "$upstream/test/unit/__init__.py"; do
+            if [[ ! -e "$package" ]]; then
+              : >"$package"
+            fi
+          done
           for test in "$upstream"/test/unit/*-test.sh; do
             printf '==> %s\n' "${test#$upstream/}"
             bash "$test"
