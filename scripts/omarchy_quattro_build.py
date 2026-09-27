@@ -112,7 +112,7 @@ def build() -> tuple[Path, Path]:
         overlay = source_dir / "configs/airootfs/usr/share/omarchy-iso/orchestrator/bootc_backend.py"
         shutil.copy2(REPO / "omarchy-quattro/bootc_backend.py", overlay)
         shutil.copy2(
-            REPO / "omarchy-quattro/native_finalize.py",
+            REPO / "scripts/native_finalize.py",
             overlay.with_name("native_finalize.py"),
         )
         shutil.copy2(
