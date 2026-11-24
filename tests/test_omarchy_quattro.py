@@ -56,6 +56,33 @@ def test_cached_archive_still_requires_exact_signed_manifest(tmp_path, monkeypat
         assert destination.read_bytes() == cached.read_bytes()
 
 
+@pytest.mark.parametrize("tampered", [False, True])
+def test_archive_cache_miss_retains_only_a_verified_registry_copy(tmp_path, monkeypatch, tampered):
+    cached = tmp_path / "cached.oci.tar"
+    destination = tmp_path / "embedded.oci.tar"
+    raw = '{"config":{"digest":"sha256:' + "b" * 64 + '"}}'
+    digest = "0" * 64 if tampered else hashlib.sha256(raw.encode()).hexdigest()
+    source = f"{builder.IMAGE_NAME}@sha256:{digest}"
+    monkeypatch.setenv("OMARCHY_BOOTC_SOURCE_ARCHIVE", str(cached))
+
+    def skopeo(args, *, capture=False):
+        if args[1] == "copy":
+            assert args[2] == "--preserve-digests" and args[3] == f"docker://{source}"
+            destination.write_bytes(b"original compressed archive")
+            return ""
+        assert args == ["skopeo", "inspect", "--raw", f"oci-archive:{destination}"]
+        return raw
+
+    monkeypatch.setattr(builder, "_run", skopeo)
+    if tampered:
+        with pytest.raises(ValueError, match="digest mismatch"):
+            builder.export_verified_archive(source, destination)
+        assert not cached.exists()
+    else:
+        builder.export_verified_archive(source, destination)
+        assert cached.read_bytes() == destination.read_bytes()
+
+
 CONTRACT_SPEC = importlib.util.spec_from_file_location(
     "quattro_native_contract", REPO / "omarchy-quattro/native_contract.py"
 )
@@ -111,6 +138,7 @@ def test_upstream_pin_is_current_live_quattro_revision() -> None:
     assert "--install-only --no-preview" in workflow
     assert "--reuse-base --no-preview" in workflow
     assert "Run installed-system desktop acceptance" in workflow
+    assert 'sudo env "PATH=$PATH" "$(command -v just)" iso omarchy-quattro' in workflow
     assert "--encrypt" not in workflow
     assert "--provision" not in workflow
 

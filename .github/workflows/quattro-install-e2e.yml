@@ -144,7 +144,7 @@ jobs:
 
       - name: Build offline Quattro ISO
         run: |
-          sudo --preserve-env=PATH just iso omarchy-quattro
+          sudo env "PATH=$PATH" "$(command -v just)" iso omarchy-quattro
           sudo chown --no-dereference "$(id -u):$(id -g)" output output/omarchy-quattro
           sudo find output/omarchy-quattro -maxdepth 1 -type f -exec chown --no-dereference "$(id -u):$(id -g)" {} +
 

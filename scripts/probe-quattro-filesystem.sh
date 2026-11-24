@@ -7,6 +7,10 @@ elif [[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_ENVIRONMENT:-} != github-hosted 
     echo 'Native deployment probe requires the owned Harvester or GitHub-hosted runner' >&2; exit 2
 fi
 : "${RUNNER_TEMP:?}" "${PROBE_OUTPUT:?}"
+podman=(sudo -n podman)
+if [[ -n ${PROBE_PODMAN_ROOT:-} ]]; then
+    podman+=(--root "$PROBE_PODMAN_ROOT" --runroot "${PROBE_PODMAN_RUNROOT:?}")
+fi
 ref=ghcr.io/joshyorko/omarchy-bootc@sha256:aca01a25953209b1e38b8aa115fe253283153f159f6f28defaede9c528476386
 source_sha=65a8e151b0bb44762a8cb1b9bdebd03c3a874296
 mkdir -p "$PROBE_OUTPUT"
@@ -35,10 +39,10 @@ fi
 sudo -n skopeo inspect --raw "oci-archive:$work/source.oci.tar" | tee "$PROBE_OUTPUT/archive-manifest.json" >/dev/null
 [[ $(skopeo manifest-digest "$PROBE_OUTPUT/archive-manifest.json") == "${ref##*@}" ]]
 runtime_id=$(jq -er '.config.digest | select(test("^sha256:[a-f0-9]{64}$"))' "$PROBE_OUTPUT/archive-manifest.json")
-if ! sudo -n podman image exists "$runtime_id"; then
-    sudo -n podman load --input "$work/source.oci.tar" 2>&1 | tee "$PROBE_OUTPUT/load.log"
+if ! "${podman[@]}" image exists "$runtime_id"; then
+    "${podman[@]}" load --input "$work/source.oci.tar" 2>&1 | tee "$PROBE_OUTPUT/load.log"
 fi
-sudo -n podman image inspect "$runtime_id" | tee "$PROBE_OUTPUT/image-inspect.json" >/dev/null
+"${podman[@]}" image inspect "$runtime_id" | tee "$PROBE_OUTPUT/image-inspect.json" >/dev/null
 jq -e --arg id "$runtime_id" --arg sha "$source_sha" \
     '(.[0].Id | sub("^sha256:"; "") | "sha256:" + .) == $id and .[0].Labels["org.opencontainers.image.revision"] == $sha' \
     "$PROBE_OUTPUT/image-inspect.json" >/dev/null
@@ -52,7 +56,7 @@ mkdir "$work/target"
 sudo -n mount "${loop}p2" "$work/target"
 sudo -n mkdir -p "$work/target/boot/efi"
 sudo -n mount "${loop}p1" "$work/target/boot/efi"
-sudo -n podman run --rm --privileged --pid=host --ipc=host --userns=host \
+"${podman[@]}" run --rm --privileged --pid=host --ipc=host --userns=host \
     --network=host --security-opt label=disable \
     -v /dev:/dev -v /run:/run -v /sys:/sys:ro \
     -v /var/lib/containers:/var/lib/containers -v "$work:/run/quattro-probe:rshared" \
@@ -91,7 +95,7 @@ print(native_composefs_cmdline(Path(sys.argv[2])))
 PY
 )
 mkdir "$work/native-view"
-sudo -n podman run --rm --privileged --pid=host --ipc=host --userns=host \
+"${podman[@]}" run --rm --privileged --pid=host --ipc=host --userns=host \
     --network=host --security-opt label=disable \
     -v /dev:/dev -v /run:/run -v /sys:/sys:ro \
     -v "$work:/run/quattro-probe:rshared" \

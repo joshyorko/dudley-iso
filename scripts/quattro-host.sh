@@ -12,6 +12,16 @@ export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$P
 export QUATTRO_SOURCE_SHA
 QUATTRO_SOURCE_SHA=$(git -c safe.directory="$PWD" rev-parse HEAD)
 export QUATTRO_RUN_ID=${run##*/}
+export CONTAINERS_STORAGE_CONF="$run/podman-storage.conf"
+export PROBE_PODMAN_ROOT=/var/lib/containers/omarchy-quattro
+export PROBE_PODMAN_RUNROOT=/run/containers/omarchy-quattro
+mkdir -p "$PROBE_PODMAN_ROOT" "$PROBE_PODMAN_RUNROOT"
+cat >"$CONTAINERS_STORAGE_CONF" <<EOF
+[storage]
+driver="overlay"
+graphroot="$PROBE_PODMAN_ROOT"
+runroot="$PROBE_PODMAN_RUNROOT"
+EOF
 mkdir -p "$run/evidence"
 exec > >(tee -a "$run/evidence/$phase.log") 2>&1
 finish() {
@@ -30,9 +40,7 @@ case "$phase" in
         bash scripts/probe-quattro-filesystem.sh
         ;;
     build)
-        if [[ -s $run/accepted-source.oci.tar ]]; then
-            export OMARCHY_BOOTC_SOURCE_ARCHIVE="$run/accepted-source.oci.tar"
-        fi
+        export OMARCHY_BOOTC_SOURCE_ARCHIVE="$run/accepted-source.oci.tar"
         python3 scripts/omarchy_quattro_build.py
         ;;
     live)
