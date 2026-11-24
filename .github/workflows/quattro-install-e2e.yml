@@ -114,7 +114,7 @@ jobs:
           PY
 
   build-and-install:
-    needs: [accepted-image-input, pinned-upstream-unit]
+    needs: [accepted-image-input, pinned-upstream-unit, native-deployment-probe]
     if: needs.accepted-image-input.outputs.ready == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
@@ -125,24 +125,28 @@ jobs:
       - name: Install ISO build and VM dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y acl golang-go podman qemu-system-x86 qemu-utils ovmf socat imagemagick tesseract-ocr tesseract-ocr-eng xorriso jq git
+          sudo apt-get install -y acl podman qemu-system-x86 qemu-utils ovmf socat imagemagick tesseract-ocr tesseract-ocr-eng xorriso jq git
           test -c /dev/kvm
           sudo setfacl -m "u:$(id -un):rw" /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Install Cosign
-        run: go install github.com/sigstore/cosign/v2/cmd/cosign@v2.4.1
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+        with:
+          cosign-release: v2.6.0
 
       - name: Install just
         uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
 
       - name: Build offline Quattro ISO
-        run: just iso omarchy-quattro
+        run: |
+          sudo --preserve-env=PATH just iso omarchy-quattro
+          sudo chown --no-dereference "$(id -u):$(id -g)" output output/omarchy-quattro
+          sudo find output/omarchy-quattro -maxdepth 1 -type f -exec chown --no-dereference "$(id -u):$(id -g)" {} +
 
       - name: Verify and record build receipts
         run: |
-          sha256sum --check output/omarchy-quattro/omarchy-quattro.iso.sha256
+          (cd output/omarchy-quattro && sha256sum --check omarchy-quattro.iso.sha256)
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -151,6 +155,7 @@ jobs:
           expected = {
               "source_ref": image["accepted_source_ref"],
               "source_digest": image["accepted_source_ref"].rsplit("@", 1)[1],
+              "source_sha": image["accepted_source_sha"],
               "certificate_identity": image["accepted_signer_identity"],
               "certificate_oidc_issuer": image["accepted_signer_oidc_issuer"],
           }
@@ -162,6 +167,35 @@ jobs:
           sha256sum output/omarchy-quattro/omarchy-quattro.image-signature.json
           echo "Image signature receipt SHA-256:" >> "$GITHUB_STEP_SUMMARY"
           sha256sum output/omarchy-quattro/omarchy-quattro.image-signature.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload first genuine ISO before VM testing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: genuine-quattro-prototype-iso-${{ github.sha }}
+          path: |
+            output/omarchy-quattro/*.iso
+            output/omarchy-quattro/*.sha256
+            output/omarchy-quattro/*.json
+          retention-days: 7
+      - name: Checkout pinned QMP capture helper
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: joshyorko/omarchy-bootc
+          ref: 65a8e151b0bb44762a8cb1b9bdebd03c3a874296
+          path: payload-contract
+          persist-credentials: false
+      - name: Boot genuine official live UI before supplying any answers
+        env:
+          CAPTURE_HELPER: ${{ github.workspace }}/payload-contract/scripts/ci/capture-vm-screen.py
+        run: bash scripts/capture-quattro-live-ui.sh output/omarchy-quattro/omarchy-quattro.iso
+      - name: Upload early raw official live UI observations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: genuine-quattro-live-ui-${{ github.sha }}
+          path: output/omarchy-quattro/interactive-live/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Prepare upstream VM install harness
         run: |
@@ -189,7 +223,47 @@ jobs:
           name: quattro-iso-vm-evidence
           if-no-files-found: warn
           path: |
-            output/omarchy-quattro/omarchy-quattro.iso
-            output/omarchy-quattro/omarchy-quattro.iso.sha256
             output/omarchy-quattro/omarchy-quattro.image-signature.json
             output/omarchy-quattro/upstream-harness/test-runs/**
+
+  native-deployment-probe:
+    needs: pinned-upstream-unit
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - name: Checkout the signed payload source contract
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: joshyorko/omarchy-bootc
+          ref: 65a8e151b0bb44762a8cb1b9bdebd03c3a874296
+          path: payload-contract
+          persist-credentials: false
+      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+        with:
+          cosign-release: v2.6.0
+      - name: Verify exact signed manifest and source before privileged execution
+        run: |
+          bash payload-contract/scripts/ci/verify-published-image-trust.sh \
+            ghcr.io/joshyorko/omarchy-bootc@sha256:aca01a25953209b1e38b8aa115fe253283153f159f6f28defaede9c528476386 \
+            65a8e151b0bb44762a8cb1b9bdebd03c3a874296
+      - name: Prepare disposable runner tools
+        run: |
+          bash payload-contract/scripts/ci/prepare-ubuntu-runner.sh
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends parted dosfstools
+      - name: Probe native filesystem and provisioning view
+        env:
+          PROBE_OUTPUT: ${{ runner.temp }}/native-probe-evidence
+        run: bash scripts/probe-quattro-filesystem.sh
+      - name: Preserve only small probe diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-deployment-probe-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/native-probe-evidence/*.json
+            ${{ runner.temp }}/native-probe-evidence/*.log
+            ${{ runner.temp }}/native-probe-evidence/*.txt
+          retention-days: 14
+          if-no-files-found: warn

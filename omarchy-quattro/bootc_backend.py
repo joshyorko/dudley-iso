@@ -99,7 +99,8 @@ def verify_embedded_image(ctx: InstallContext) -> None:
     if not attestation_ok:
         raise RuntimeError("embedded image signature receipt does not prove the accepted attestation")
     receipt = ARCHIVE_CHECKSUM.read_text().split()
-    actual_archive_sha = hashlib.sha256(EMBEDDED_ARCHIVE.read_bytes()).hexdigest()
+    with EMBEDDED_ARCHIVE.open("rb") as stream:
+        actual_archive_sha = hashlib.file_digest(stream, "sha256").hexdigest()
     if not receipt or receipt[0] != actual_archive_sha:
         raise RuntimeError("embedded Quattro OCI archive checksum mismatch")
     load = subprocess.run(

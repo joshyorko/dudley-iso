@@ -31,8 +31,8 @@ CONTRACT_SPEC.loader.exec_module(NATIVE_CONTRACT)
 
 def test_image_config_separates_embedded_digest_from_future_tracking_ref() -> None:
     config = json.loads(IMAGE_CONFIG.read_text())
-    # The release digest is intentionally a repo-owned post-merge input.
-    assert config["accepted_source_ref"] == ""
+    # The prototype uses the owner-authorized signed testing payload.
+    assert config["accepted_source_ref"] == "ghcr.io/joshyorko/omarchy-bootc@sha256:aca01a25953209b1e38b8aa115fe253283153f159f6f28defaede9c528476386"
     assert config["tracking_ref"] == "ghcr.io/joshyorko/omarchy-bootc:testing"
     assert config["accepted_signer_identity"] == (
         "https://github.com/joshyorko/omarchy-bootc/.github/workflows/build.yml@refs/heads/main"
@@ -57,7 +57,7 @@ def test_upstream_pin_is_current_live_quattro_revision() -> None:
     assert "unittest discover" in workflow
     assert "needs.accepted-image-input.outputs.ready == 'true'" in workflow
     assert "Verify and record build receipts" in workflow
-    assert "sha256sum --check output/omarchy-quattro/omarchy-quattro.iso.sha256" in workflow
+    assert "cd output/omarchy-quattro && sha256sum --check omarchy-quattro.iso.sha256" in workflow
     assert "--install-only --no-preview" in workflow
     assert "--encrypt" not in workflow
     assert "--provision" not in workflow

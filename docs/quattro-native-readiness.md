@@ -28,9 +28,10 @@ results do not prove a bootable ISO or installed guest.
 - Signed immutable image: `ghcr.io/joshyorko/omarchy-bootc@sha256:aca01a25953209b1e38b8aa115fe253283153f159f6f28defaede9c528476386`
 - Intended future stream: `ghcr.io/joshyorko/omarchy-bootc:testing`
 
-The accepted reference remains empty in `image.json` to prevent an expensive
-build from automatically starting while the following blockers are unresolved.
-The source SHA is now checked in the verified attestation before image pulling.
+The owner-authorized unencrypted prototype now enables that exact signed
+reference in `image.json`. A serialized hosted native-filesystem probe precedes
+the genuine ISO build. The source SHA is checked in the verified attestation
+before image pulling. This is execution toward a prototype, not qualification.
 Stable is unchanged. No OCI rebuild is needed for the installer work.
 
 ## Blocking deployment differences

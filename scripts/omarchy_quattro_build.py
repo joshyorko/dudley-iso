@@ -43,11 +43,16 @@ def verify_image_config(config: dict[str, str]) -> tuple[str, str, str, str]:
     return source, source.rsplit("@", 1)[1], identity, issuer
 
 
+def file_sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def verify_archive(archive: Path, checksum_file: Path) -> None:
     fields = checksum_file.read_text().split()
     if len(fields) < 1 or not re.fullmatch(r"[0-9a-f]{64}", fields[0]):
         raise ValueError("embedded OCI archive checksum is malformed")
-    actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+    actual = file_sha256(archive)
     if actual != fields[0]:
         raise ValueError("embedded OCI archive checksum does not match")
 
@@ -153,7 +158,7 @@ def build() -> tuple[Path, Path]:
     source_sha = config.get("accepted_source_sha", "")
     if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
         raise ValueError("accepted image source SHA must be exact")
-    for tool in ("git", "podman", "cosign", "sha256sum"):
+    for tool in ("git", "podman", "skopeo", "cosign", "sha256sum"):
         if not shutil.which(tool):
             raise RuntimeError(f"{tool} is required")
 
@@ -209,9 +214,11 @@ def build() -> tuple[Path, Path]:
         archive = temporary_dir / "omarchy-quattro-image.oci.tar"
         tagged = "localhost/omarchy-quattro:embedded"
         _run(["podman", "tag", source_ref, tagged])
-        _run(["podman", "save", "--format", "oci-archive", "--output", str(archive), tagged])
+        _run(["skopeo", "copy", "--preserve-digests", f"containers-storage:{tagged}", f"oci-archive:{archive}:{tagged}"])
+        raw_manifest = _run(["skopeo", "inspect", "--raw", f"oci-archive:{archive}"], capture=True)
+        verify_pulled_digest(digest, "sha256:" + hashlib.sha256(raw_manifest.encode()).hexdigest())
         checksum_file = temporary_dir / "omarchy-quattro-image.oci.tar.sha256"
-        checksum_file.write_text(hashlib.sha256(archive.read_bytes()).hexdigest() + "  " + archive.name + "\n")
+        checksum_file.write_text(file_sha256(archive) + "  " + archive.name + "\n")
         verify_archive(archive, checksum_file)
         signature_receipt = temporary_dir / "omarchy-quattro-image.signature.json"
         signature_receipt.write_text(json.dumps({
@@ -245,13 +252,21 @@ def build() -> tuple[Path, Path]:
         staged_iso = temporary_dir / OUTPUT_ISO.name
         staged_checksum = temporary_dir / OUTPUT_SHA256.name
         shutil.copy2(candidates[-1], staged_iso)
-        checksum = hashlib.sha256(staged_iso.read_bytes()).hexdigest()
+        checksum = file_sha256(staged_iso)
         staged_checksum.write_text(f"{checksum}  {OUTPUT_ISO.name}\n")
         staged_signature = temporary_dir / OUTPUT_SIGNATURE.name
         shutil.copy2(signature_receipt, staged_signature)
         os.replace(staged_iso, OUTPUT_ISO)
         os.replace(staged_checksum, OUTPUT_SHA256)
         os.replace(staged_signature, OUTPUT_SIGNATURE)
+        (OUTPUT_DIR / "omarchy-quattro.iso.receipt.json").write_text(json.dumps({
+            "schema": "dudley.quattro-prototype-iso/v1",
+            "builder_source_sha": os.environ.get("GITHUB_SHA", _run(["git", "rev-parse", "HEAD"], capture=True).strip()),
+            "upstream_revision": UPSTREAM_REVISION, "payload_source_sha": source_sha,
+            "image_ref": source_ref, "tracking_ref": config["tracking_ref"],
+            "iso_sha256": checksum, "run_id": os.environ.get("GITHUB_RUN_ID"),
+            "qualification": "prototype only; actual UI/install/desktop and encryption gates pending",
+        }, indent=2) + "\n")
     return OUTPUT_ISO, OUTPUT_SHA256
 
 
