@@ -40,17 +40,24 @@ Stable is unchanged. No OCI rebuild is needed for the installer work.
    Omarchy's encrypted/deferred path uses Limine/mkinitcpio unlock integration;
    native bootc composefs uses different boot ownership. Removing the rejection
    would not implement secure unlock. Encryption parity is BLOCKED.
-2. The adapter assumes the native physical sysroot can support upstream
-   arch-chroot user creation and official finalization. Its `/usr` view and
-   provisioning must be demonstrated using the signed image in a disposable
-   guest, not inferred from source tests or replaced with local provisioning.
+2. Native deployment, systemd-boot and the composed root have passed in a
+   disposable guest. The packaged installer reached user creation but failed
+   when Archinstall 4.5 tried to pacstrap `zram-generator`. The coordinator-selected
+   prototype now disables that hidden default explicitly, retains the signed
+   image, and uses its existing `C.UTF-8` locale. Root setup is limited to audited
+   mutable configuration; the official per-user provisioner is preserved.
 3. Omarchy's older parity contract describes OSTree deployment lookup and
-   `bootc install finalize`. The current payload/adapter selects native
-   composefs. Those commands cannot be transplanted without proving backend
-   support. Native finalization/boot artifacts need real verification.
-4. The current E2E recipe uses upstream `--install-only` automation. It does not
-   prove interactive disk, encryption or account questions. Its former forced
-   TCG fallback is removed: a required KVM gate must fail when unavailable.
+   `bootc install finalize`. The pinned 1.16.13 command checks OSTree deployments
+   and does not finalize a native layout. The adapter follows native
+   `finalize_filesystem`: trim, remount read-only and freeze/thaw root plus any
+   separately mounted boot/ESP, explicitly skipping freeze on VFAT. This needs
+   real installed-system boot evidence. The image retains OSTree-oriented
+   prepare-root configuration; native composefs boot, persistent `/etc` and
+   `/var`, and day-2 update/rollback must be qualified explicitly.
+4. Upstream `--install-only` drives the real interactive disk/account wizard,
+   then stops after console login and saving the installed base. Disk-only
+   SDDM password login and desktop checks must follow using that same base with
+   no CD attached. KVM is required; no software-emulation result substitutes.
 
 ## Mandatory qualification before owner testing
 
@@ -63,4 +70,5 @@ official baseline scenarios, including encryption, deferred provisioning and
 cidata; the latter is supplemental, not an interactive substitute.
 
 Every missing scenario is NOT RUN/BLOCKED. No current ISO is qualified for this
-full matrix; no genuine installer screenshot is claimed yet.
+full matrix. Genuine wizard screenshots exist; installed boot and desktop
+qualification remain pending.

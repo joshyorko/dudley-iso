@@ -280,7 +280,16 @@ def test_backend_uses_native_composefs_without_ostree_or_bootc_finalize() -> Non
     assert backend.index('("Verifying embedded Quattro image", verify_embedded_image)') < backend.index(
         '("Preparing live environment", prepare_live)'
     )
-    assert 'fields[1] == "/"' in backend or 'fields[1] == \'/\'' in backend
+    assert 'native_fstab(fstab.read_text())' in backend
+
+
+def test_native_fstab_coalesces_duplicate_mounts_and_rejects_conflicts():
+    contents = "# layout\nUUID=root / btrfs rw 0 0\nUUID=esp /boot vfat rw 0 2\nUUID=esp\t/boot vfat rw 0 2\n"
+    expected = "# layout\nUUID=esp /boot vfat rw 0 2\n"
+    assert NATIVE_CONTRACT.native_fstab(contents) == expected
+    assert NATIVE_CONTRACT.native_fstab(expected) == expected
+    with pytest.raises(RuntimeError, match="conflicting fstab records for /boot"):
+        NATIVE_CONTRACT.native_fstab(contents + "UUID=other /boot vfat rw 0 2\n")
 
 
 def test_native_accounts_use_bootcs_composed_root_and_persistent_state() -> None:
@@ -326,7 +335,7 @@ def test_native_contract_allows_unencrypted_deferred_provisioning() -> None:
 def test_native_filesystem_finalization_orders_fstrim_readonly_and_freeze(tmp_path: Path) -> None:
     class Result:
         returncode = 0
-        stdout = "btrfs\n"
+        stdout = "9123683e\n"
         stderr = ""
 
     calls = []
@@ -339,7 +348,7 @@ def test_native_filesystem_finalization_orders_fstrim_readonly_and_freeze(tmp_pa
         target = tmp_path
 
     finalize_native_filesystem(Context.target, runner)
-    assert [call[0] for call in calls] == ["findmnt", "fstrim", "mount", "fsfreeze", "fsfreeze"]
+    assert [call[0] for call in calls] == ["stat", "fstrim", "mount", "fsfreeze", "fsfreeze"]
     assert calls[1][1] == "--quiet-unsupported"
     assert calls[2][1:3] == ["-o", "remount,ro"]
     assert calls[3][1:] == ["--freeze", str(tmp_path)]
@@ -354,11 +363,11 @@ def test_native_finalization_flushes_separate_vfat_boot_without_freezing_it(tmp_
 
     def runner(args, **kwargs):
         calls.append(args)
-        fstype = "vfat" if args[-1] == str(boot) else "btrfs"
+        fstype = "4d44" if args[-1] == str(boot) else "9123683e"
         return subprocess.CompletedProcess(args, 0, fstype + "\n", "")
 
     finalize_native_filesystem(tmp_path, runner)
-    assert [args[0] for args in calls if args[-1] == str(boot)] == ["findmnt", "fstrim", "mount"]
+    assert [args[0] for args in calls if args[-1] == str(boot)] == ["stat", "fstrim", "mount"]
     assert [args[-1] for args in calls if args[0] == "fsfreeze"] == [str(tmp_path), str(tmp_path)]
 
 
@@ -381,6 +390,19 @@ def test_native_swap_configures_the_image_generator_without_pacstrap():
     assert "usr/lib/systemd/system-generators/zram-generator" in backend
     assert "etc/systemd/zram-generator.conf" in backend
     assert '"systemd-zram-setup@zram0.service"' in backend
+
+
+def test_native_contract_rejects_explicit_zram_but_allows_the_hidden_default():
+    from types import SimpleNamespace
+    ctx = SimpleNamespace(state={}, encrypt=False, user_configuration={"swap": {"enabled": True}})
+    with pytest.raises(RuntimeError, match="explicit zram swap"):
+        NATIVE_CONTRACT.validate_native_install_contract(ctx)
+    ctx.user_configuration = {"swap": True}
+    NATIVE_CONTRACT.validate_native_install_contract(ctx)
+    backend = (REPO / "omarchy-quattro/bootc_backend.py").read_text()
+    assert 'config.swap.enabled = False' not in backend
+    assert 'and ctx.state["native_swap_policy"] != "no-zram-prototype"' in backend
+    assert '"swap_policy": ctx.state["native_swap_policy"]' in backend
 
 
 def test_existing_iso_family_recipes_are_unchanged() -> None:

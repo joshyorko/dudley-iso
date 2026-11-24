@@ -11,6 +11,27 @@ import tarfile
 from pathlib import Path
 
 
+def native_fstab(contents: str) -> str:
+    """Keep a single record per mount and let composefs own the root mount."""
+    records: dict[str, list[str]] = {}
+    lines = []
+    for line in contents.splitlines():
+        fields = line.split()
+        if not fields or fields[0].startswith("#") or len(fields) < 2:
+            lines.append(line)
+            continue
+        target = fields[1]
+        if target == "/":
+            continue
+        if target in records:
+            if fields != records[target]:
+                raise RuntimeError(f"conflicting fstab records for {target}")
+            continue
+        records[target] = fields
+        lines.append(line)
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def verified_archive_config(raw_manifest: str, expected_digest: str) -> str:
     """Bind runtime config identity to the unchanged accepted OCI manifest."""
     if "sha256:" + hashlib.sha256(raw_manifest.encode()).hexdigest() != expected_digest:
@@ -91,6 +112,9 @@ def validate_native_install_contract(ctx: Any) -> None:
             "encrypted Quattro installs are not supported by the native composefs adapter; "
             "disable disk encryption before continuing"
         )
+    swap = (user_config or {}).get("swap") if isinstance(user_config, Mapping) else None
+    if isinstance(swap, Mapping) and swap.get("enabled"):
+        raise RuntimeError("explicit zram swap is unsupported by the no-zram prototype; its generator must be image-built")
 def native_composefs_cmdline(sysroot: Path) -> str:
     """Select the initial native deployment without changing bootc's verity policy."""
     deployments = [path.name for path in (sysroot / "state/deploy").iterdir()

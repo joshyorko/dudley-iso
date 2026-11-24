@@ -18,7 +18,7 @@ def finalize_native_filesystem(target: Path, runner: Callable = subprocess.run) 
 def _finalize_filesystem(target: Path, runner: Callable) -> None:
     mountpoint = str(target)
     filesystem = runner(
-        ["findmnt", "--noheadings", "--output", "FSTYPE", "--mountpoint", mountpoint],
+        ["stat", "-f", "--format=%t", "--", mountpoint],
         check=True, capture_output=True, text=True,
     ).stdout.strip()
     if not filesystem or len(filesystem.splitlines()) != 1:
@@ -29,7 +29,7 @@ def _finalize_filesystem(target: Path, runner: Callable) -> None:
     remount = runner(["mount", "-o", "remount,ro", mountpoint], check=False, capture_output=True, text=True)
     if remount.returncode:
         raise RuntimeError(f"could not remount native composefs sysroot read-only: {remount.stderr.strip()}")
-    if filesystem == "vfat":
+    if filesystem == "4d44":  # Linux MSDOS_SUPER_MAGIC, also used by VFAT.
         return
     freeze = runner(["fsfreeze", "--freeze", mountpoint], check=False, capture_output=True, text=True)
     if freeze.returncode:

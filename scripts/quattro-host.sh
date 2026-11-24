@@ -64,7 +64,8 @@ case "$phase" in
             ./bin/omarchy-iso-test "$iso" --install-only --no-preview --timeout 14400
         else
             test -s "$harness/test-runs/omarchy-quattro/base.qcow2"
-            ./bin/omarchy-iso-test "$iso" --reuse-base --no-preview --timeout 14400
+            digest=$(jq -er '.accepted_source_ref | split("@")[1]' "$run/source/omarchy-quattro/image.json")
+            bash "$run/source/scripts/quattro-initial-desktop-smoke.sh" "$harness" "$iso" "$digest"
         fi
         ;;
     *) exit 2 ;;

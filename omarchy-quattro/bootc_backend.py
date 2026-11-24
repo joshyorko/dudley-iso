@@ -19,7 +19,7 @@ from pathlib import Path
 from . import archinstall_adapter as arch
 from .context import InstallContext
 from .native_finalize import finalize_native_filesystem as _finalize_native_filesystem
-from .native_contract import native_composefs_cmdline, validate_native_install_contract, verified_archive_tar_config
+from .native_contract import native_composefs_cmdline, native_fstab, validate_native_install_contract, verified_archive_tar_config
 from .phases_impl import (
     configure_dns_resolver,
     configure_login,
@@ -254,13 +254,7 @@ def _sanitize_fstab(ctx: InstallContext) -> None:
     fstab = _sysroot_path(ctx, "etc", "fstab")
     if not fstab.exists():
         raise RuntimeError(f"installer did not create {fstab}")
-    kept = []
-    for line in fstab.read_text().splitlines():
-        fields = line.split()
-        if len(fields) >= 2 and fields[1] == "/":
-            continue
-        kept.append(line)
-    fstab.write_text("\n".join(kept).rstrip() + "\n")
+    fstab.write_text(native_fstab(fstab.read_text()))
 
 
 def _install_system(ctx: InstallContext) -> None:
@@ -268,6 +262,7 @@ def _install_system(ctx: InstallContext) -> None:
         raise RuntimeError("embedded archive was not verified before disk mutation")
     handler = ctx.state["arch_config_handler"]
     config = handler.config
+    _apply_native_prototype_policy(ctx, config)
     pre_mounted = arch.is_pre_mount(config)
 
     if not pre_mounted:
@@ -300,8 +295,18 @@ def _install_system(ctx: InstallContext) -> None:
         _configure_native_target(ctx, config, pre_mounted)
 
 
+def _apply_native_prototype_policy(ctx: InstallContext, config: arch.ArchConfig) -> None:
+    if ctx.user_configuration.get("swap") is True:
+        if ctx.state.get("native_swap_policy") != "no-zram-prototype":
+            info("› no-zram prototype: disabling the wizard's hidden swap default; signed image unchanged")
+        ctx.state["native_swap_policy"] = "no-zram-prototype"
+    else:
+        ctx.state["native_swap_policy"] = "image-generator-required" if config.swap and config.swap.enabled else "not-requested"
+
+
 def _configure_native_target(ctx: InstallContext, config: arch.ArchConfig, pre_mounted: bool) -> None:
     """Configure the deployed composed root without partitioning or importing again."""
+    _apply_native_prototype_policy(ctx, config)
     fstab = subprocess.run(["genfstab", "-U", str(ctx.target)], check=True,
                            capture_output=True, text=True).stdout
     _prepare_native_view(ctx)
@@ -319,7 +324,7 @@ def _configure_native_target(ctx: InstallContext, config: arch.ArchConfig, pre_m
     with arch.open_installer(config, ctx.target, silent=True) as installer:
         if not ctx.defer_provisioning and config.auth_config and config.auth_config.users:
             installer.create_users(config.auth_config.users)
-        if config.swap and config.swap.enabled:
+        if config.swap and config.swap.enabled and ctx.state["native_swap_policy"] != "no-zram-prototype":
             generator = _sysroot_path(ctx, "usr/lib/systemd/system-generators/zram-generator")
             if not os.access(generator, os.X_OK):
                 raise RuntimeError("zram swap requires zram-generator in the signed image")
@@ -366,6 +371,7 @@ def _configure_native_system(ctx: InstallContext) -> None:
         "login/sddm.sh",
     )
     script = r'''set -euo pipefail
+export PATH=/usr/share/omarchy/bin:/usr/bin:/bin:/usr/sbin:/sbin
 export OMARCHY_FIRST_INSTALL=1 OMARCHY_UPGRADE=0
 source "$OMARCHY_INSTALL/helpers/logging.sh"
 start_install_log
@@ -409,6 +415,8 @@ stop_install_log
         "upstream_mutable_leaves": leaves,
         "package_and_hardware_setup": "supplied by the signed image",
         "boot_ownership": "bootc-composefs",
+        "swap_policy": ctx.state["native_swap_policy"],
+        "locale": _sysroot_path(ctx, "etc/locale.conf").read_text().strip(),
     }, indent=2) + "\n")
 
 
