@@ -16,6 +16,7 @@ loop=''
 cleanup() {
     local status=$?
     trap - EXIT
+    if mountpoint -q "$work/native-view"; then sudo -n umount --recursive "$work/native-view" || status=1; fi
     if mountpoint -q "$work/target"; then sudo -n umount --recursive "$work/target" || status=1; fi
     if [[ -n $loop ]] && [[ $(sudo -n losetup -n -O BACK-FILE "$loop") == "$work/disk.raw" ]]; then
         sudo -n losetup --detach "$loop" || status=1
@@ -25,12 +26,18 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT
-sudo -n skopeo copy --preserve-digests "docker://$ref" "oci-archive:$work/source.oci.tar:quattro-probe" \
-    2>&1 | tee "$PROBE_OUTPUT/registry-copy.log"
+if [[ -n ${PROBE_SOURCE_ARCHIVE:-} ]]; then
+    sudo -n cp --reflink=auto "$PROBE_SOURCE_ARCHIVE" "$work/source.oci.tar"
+else
+    sudo -n skopeo copy --preserve-digests "docker://$ref" "oci-archive:$work/source.oci.tar:quattro-probe" \
+        2>&1 | tee "$PROBE_OUTPUT/registry-copy.log"
+fi
 sudo -n skopeo inspect --raw "oci-archive:$work/source.oci.tar" | tee "$PROBE_OUTPUT/archive-manifest.json" >/dev/null
 [[ $(skopeo manifest-digest "$PROBE_OUTPUT/archive-manifest.json") == "${ref##*@}" ]]
 runtime_id=$(jq -er '.config.digest | select(test("^sha256:[a-f0-9]{64}$"))' "$PROBE_OUTPUT/archive-manifest.json")
-sudo -n podman load --input "$work/source.oci.tar" 2>&1 | tee "$PROBE_OUTPUT/load.log"
+if ! sudo -n podman image exists "$runtime_id"; then
+    sudo -n podman load --input "$work/source.oci.tar" 2>&1 | tee "$PROBE_OUTPUT/load.log"
+fi
 sudo -n podman image inspect "$runtime_id" | tee "$PROBE_OUTPUT/image-inspect.json" >/dev/null
 jq -e --arg id "$runtime_id" --arg sha "$source_sha" \
     '(.[0].Id | sub("^sha256:"; "") | "sha256:" + .) == $id and .[0].Labels["org.opencontainers.image.revision"] == $sha' \
@@ -75,7 +82,25 @@ PY
 # userspace. This is a probe result, never an account-provisioning PASS.
 status=0
 sudo -n chroot "$work/target" /usr/bin/id 2>&1 | tee "$PROBE_OUTPUT/physical-chroot.log" || status=$?
+native_cmdline=$(sudo -n python3 - "$PWD/omarchy-quattro" "$work/target" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from native_contract import native_composefs_cmdline
+print(native_composefs_cmdline(Path(sys.argv[2])))
+PY
+)
+mkdir "$work/native-view"
+sudo -n podman run --rm --privileged --pid=host --ipc=host --userns=host \
+    --network=host --security-opt label=disable \
+    -v /dev:/dev -v /run:/run -v /sys:/sys:ro \
+    -v "$work:/run/quattro-probe:rshared" \
+    "$runtime_id" /usr/lib/bootc/initramfs-setup \
+    --sysroot /run/quattro-probe/target --target /run/quattro-probe/native-view \
+    --cmdline "$native_cmdline" 2>&1 | tee "$PROBE_OUTPUT/native-root-setup.log"
+sudo -n findmnt --json --submounts "$work/native-view" | tee "$PROBE_OUTPUT/native-view-mounts.json" >/dev/null
+sudo -n chroot "$work/native-view" /usr/bin/id 2>&1 | tee "$PROBE_OUTPUT/native-chroot.log"
 jq -n --arg image "$ref" --arg source "$source_sha" --argjson chroot_exit "$status" \
     '{scope:"native filesystem deployment probe only",image:$image,source_sha:$source,
-      physical_chroot_exit:$chroot_exit,iso_built:false,interactive_installation_qualified:false}' \
+      physical_chroot_exit:$chroot_exit,native_chroot_exit:0,iso_built:false,interactive_installation_qualified:false}' \
     >"$PROBE_OUTPUT/probe.receipt.json"

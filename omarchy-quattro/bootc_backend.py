@@ -1,10 +1,8 @@
 """Native composefs deployment backend for the upstream Omarchy installer.
 
-`ctx.target` is the physical sysroot mounted by archinstall. Native composefs
-does not expose an OSTree deployment directory: mutable install-time state is
-written below this sysroot's /etc and /var, while /usr is image-owned. The
-backend never searches for an OSTree deployment and never calls an OSTree-only
-bootc finalizer.
+Archinstall mounts the physical sysroot. Bootc's own initramfs setup then
+exposes its composed root and persistent /etc and /var for upstream setup.
+The backend never searches for an OSTree deployment or calls its finalizer.
 """
 
 from __future__ import annotations
@@ -20,7 +18,7 @@ from pathlib import Path
 from . import archinstall_adapter as arch
 from .context import InstallContext
 from .native_finalize import finalize_native_filesystem as _finalize_native_filesystem
-from .native_contract import validate_native_install_contract, verified_archive_config
+from .native_contract import native_composefs_cmdline, validate_native_install_contract, verified_archive_config
 from .phases_impl import (
     configure_dns_resolver,
     configure_login,
@@ -139,12 +137,15 @@ def _run_embedded(ctx: InstallContext, *args: str) -> subprocess.CompletedProces
         raise RuntimeError("embedded Quattro image was not verified before installation")
     if not TRACKING_REF or "@sha256:" in TRACKING_REF:
         raise RuntimeError("future tracking ref must be supplied separately from the accepted source digest")
+    runtime_dir = Path("/run/omarchy-bootc")
+    runtime_dir.mkdir(parents=True, exist_ok=True)
     command = [
         "podman", "run", "--rm", "--privileged", "--pid=host", "--ipc=host",
         "--userns=host", "--network=host", "--security-opt", "label=disable",
         "--volume", "/dev:/dev", "--volume", "/run:/run", "--volume", "/sys:/sys:ro",
         "--volume", "/var/lib/containers:/var/lib/containers",
-        "--volume", f"{ctx.target}:{ctx.target}",
+        "--volume", f"{ctx.target}:{ctx.target}:rshared",
+        "--volume", f"{runtime_dir}:{runtime_dir}:rshared",
         "--volume", f"{EMBEDDED_ARCHIVE}:/run/omarchy-bootc/quattro.oci.tar:ro",
         ctx.state["omarchy_bootc_runtime_id"],
         *args,
@@ -157,6 +158,51 @@ def _run_embedded(ctx: InstallContext, *args: str) -> subprocess.CompletedProces
                 log.write(result.stdout + result.stderr)
         raise RuntimeError("native composefs image deployment failed")
     return result
+
+
+def _prepare_native_view(ctx: InstallContext) -> None:
+    physical = ctx.target
+    cmdline = native_composefs_cmdline(physical)
+    view = Path("/run/omarchy-bootc/native-root")
+    view.mkdir(parents=True, exist_ok=True)
+    if view.is_mount():
+        raise RuntimeError("a previous native installer root is still mounted")
+    _run_embedded(ctx, "/usr/lib/bootc/initramfs-setup", "--sysroot", str(physical),
+                  "--target", str(view), "--cmdline", cmdline)
+    try:
+        deployment = cmdline.removeprefix("composefs=").removeprefix("?")
+        if not (view / "usr/bin/bash").is_file() or not (view / "etc").samefile(
+            physical / "state/deploy" / deployment / "etc"
+        ):
+            raise RuntimeError("native root does not expose the installed userspace and persistent configuration")
+        # Preserve the official storage layout across the composed root view.
+        for source, destination in (("boot", "boot"), ("home", "var/home"),
+                                    ("var/log", "var/log"), ("var/cache/pacman/pkg", "var/cache/pacman/pkg")):
+            if (physical / source).is_mount() or source == "boot":
+                (view / destination).mkdir(parents=True, exist_ok=True)
+                subprocess.run(["mount", "--rbind", str(physical / source), str(view / destination)], check=True)
+    except BaseException:
+        subprocess.run(["umount", "--recursive", str(view)], check=False)
+        raise
+    ctx.state["native_physical_target"] = physical
+    ctx.target = view
+    ctx.target_log_path = view / "var/log/omarchy-install.log"
+
+
+def cleanup_native_view(ctx: InstallContext) -> None:
+    physical = ctx.state.get("native_physical_target")
+    if physical is None:
+        return
+    if ctx.target.is_mount():
+        subprocess.run(["umount", "--recursive", str(ctx.target)], check=True)
+    ctx.target = physical
+    ctx.target_log_path = physical / "var/log/omarchy-install.log"
+    del ctx.state["native_physical_target"]
+
+
+def _finish_native_filesystem(ctx: InstallContext) -> None:
+    cleanup_native_view(ctx)
+    _finalize_native_filesystem(ctx.target)
 
 
 def _sanitize_fstab(ctx: InstallContext) -> None:
@@ -203,6 +249,10 @@ def _install_system(ctx: InstallContext) -> None:
             str(ctx.target),
         )
 
+        fstab = subprocess.run(["genfstab", "-U", str(ctx.target)], check=True,
+                               capture_output=True, text=True).stdout
+        _prepare_native_view(ctx)
+
         # The installer owns only machine-local config in the physical sysroot.
         # /usr is immutable image content and must never be overlaid by adapter
         # writes. Validate the paths before handing control to upstream writers.
@@ -213,21 +263,22 @@ def _install_system(ctx: InstallContext) -> None:
         marker.write_text("upstream-omarchy-iso\n")
         marker.chmod(0o644)
 
-        if not ctx.defer_provisioning and config.auth_config and config.auth_config.users:
-            installer.create_users(config.auth_config.users)
-        if config.swap and config.swap.enabled:
-            installer.setup_swap(algo=config.swap.algorithm)
-        if config.timezone:
-            installer.set_timezone(config.timezone)
-        if config.ntp:
-            installer.activate_time_synchronization()
-        if root_user := arch.root_user(config):
-            installer.set_user_password(root_user)
+        with arch.open_installer(config, ctx.target, silent=True) as installer:
+            if not ctx.defer_provisioning and config.auth_config and config.auth_config.users:
+                installer.create_users(config.auth_config.users)
+            if config.swap and config.swap.enabled:
+                installer.setup_swap(algo=config.swap.algorithm)
+            if config.timezone:
+                installer.set_timezone(config.timezone)
+            if config.ntp:
+                installer.activate_time_synchronization()
+            if root_user := arch.root_user(config):
+                installer.set_user_password(root_user)
 
         if pre_mounted:
             _write_pre_mounted_fstab(ctx)
         else:
-            installer.genfstab()
+            _sysroot_path(ctx, "etc", "fstab").write_text(fstab)
         _sanitize_fstab(ctx)
 
 
@@ -268,5 +319,5 @@ def build_phases(ctx: InstallContext):
         ("Configuring Tailscale", configure_tailscale),
         ("Configuring DNS resolver", configure_dns_resolver),
         ("Validating boot setup", _validate_boot),
-        ("Finalizing native filesystem", lambda context: _finalize_native_filesystem(context.target)),
+        ("Finalizing native filesystem", _finish_native_filesystem),
     ]

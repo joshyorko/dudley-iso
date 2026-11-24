@@ -7,6 +7,7 @@ from typing import Any
 import hashlib
 import json
 import re
+from pathlib import Path
 
 
 def verified_archive_config(raw_manifest: str, expected_digest: str) -> str:
@@ -67,3 +68,18 @@ def validate_native_install_contract(ctx: Any) -> None:
             "encrypted Quattro installs are not supported by the native composefs adapter; "
             "disable disk encryption before continuing"
         )
+def native_composefs_cmdline(sysroot: Path) -> str:
+    """Select the initial native deployment without changing bootc's verity policy."""
+    deployments = [path.name for path in (sysroot / "state/deploy").iterdir()
+                   if path.is_dir() and re.fullmatch(r"[a-f0-9]{128}", path.name)]
+    if len(deployments) != 1:
+        raise RuntimeError("expected exactly one initial native composefs deployment")
+    options = set()
+    for entry in (sysroot / "boot").glob("**/loader/entries/*.conf"):
+        for line in entry.read_text().splitlines():
+            if line.startswith("options "):
+                options.update(token for token in line.split()[1:] if token.startswith("composefs="))
+    expected = {"composefs=" + deployments[0], "composefs=?" + deployments[0]}
+    if len(options) != 1 or not options.issubset(expected):
+        raise RuntimeError("native boot entry does not identify the installed deployment")
+    return options.pop()

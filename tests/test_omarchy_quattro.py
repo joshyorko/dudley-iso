@@ -64,6 +64,20 @@ NATIVE_CONTRACT = importlib.util.module_from_spec(CONTRACT_SPEC)
 CONTRACT_SPEC.loader.exec_module(NATIVE_CONTRACT)
 
 
+def test_native_target_uses_the_deployment_and_bootcs_exact_verity_policy(tmp_path):
+    deployment = "a" * 128
+    (tmp_path / "state/deploy" / deployment / "etc").mkdir(parents=True)
+    entries = tmp_path / "boot/efi/loader/entries"
+    entries.mkdir(parents=True)
+    entry = entries / "bootc.conf"
+    for policy in (deployment, "?" + deployment):
+        entry.write_text(f"title bootc\noptions root=UUID=example composefs={policy} rw\n")
+        assert NATIVE_CONTRACT.native_composefs_cmdline(tmp_path) == f"composefs={policy}"
+    entry.write_text("options composefs=" + "b" * 128 + "\n")
+    with pytest.raises(RuntimeError, match="boot entry"):
+        NATIVE_CONTRACT.native_composefs_cmdline(tmp_path)
+
+
 def test_image_config_separates_embedded_digest_from_future_tracking_ref() -> None:
     config = json.loads(IMAGE_CONFIG.read_text())
     # The prototype uses the owner-authorized signed testing payload.
@@ -167,6 +181,15 @@ def test_backend_uses_native_composefs_without_ostree_or_bootc_finalize() -> Non
         '("Preparing live environment", prepare_live)'
     )
     assert 'fields[1] == "/"' in backend or 'fields[1] == \'/\'' in backend
+
+
+def test_native_accounts_use_bootcs_composed_root_and_persistent_state() -> None:
+    backend = (REPO / "omarchy-quattro/bootc_backend.py").read_text()
+    assert "/usr/lib/bootc/initramfs-setup" in backend
+    assert "native_composefs_cmdline(physical)" in backend
+    assert backend.index("_prepare_native_view(ctx)") < backend.index("installer.create_users(")
+    assert 'ctx.state["native_physical_target"]' in backend
+    assert "_finish_native_filesystem" in backend
 
 
 def test_native_contract_rejects_encryption_before_live_preparation() -> None:

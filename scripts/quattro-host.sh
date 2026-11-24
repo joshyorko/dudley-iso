@@ -24,6 +24,9 @@ df -Pk "$run" | awk 'NR==2 {exit !($4 >= 35*1024*1024)}'
 case "$phase" in
     probe)
         export RUNNER_TEMP="$run" PROBE_OUTPUT="$run/evidence/native-probe"
+        if [[ -s $run/accepted-source.oci.tar ]]; then
+            export PROBE_SOURCE_ARCHIVE="$run/accepted-source.oci.tar"
+        fi
         bash scripts/probe-quattro-filesystem.sh
         ;;
     build)

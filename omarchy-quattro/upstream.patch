@@ -72,3 +72,7 @@ index 9b6ebf5..b3978af 100644
 +        from .bootc_backend import build_phases as build_bootc_phases
 +        return build_bootc_phases(ctx)
 +
+@@ -107,0 +114,3 @@ def main() -> int:
++        if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":
++            from .bootc_backend import cleanup_native_view
++            cleanup_native_view(ctx)
