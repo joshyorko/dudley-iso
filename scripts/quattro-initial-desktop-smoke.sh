@@ -31,6 +31,8 @@ type_text 'uname -sr'
 press ret
 capture_console success-initial-terminal
 verify_surface_shortcut menu meta_l-spc omarchy-menu omarchy.menu
+verify_surface_shortcut apps-menu meta_l-alt-spc omarchy-menu omarchy.menu
+verify_surface_shortcut emojis meta_l-ctrl-e omarchy-emojis omarchy.emojis
 ssh_guest "echo $GUEST_PASSWORD | sudo -S bootc status --json" >"$RUN_DIR/bootc-status.json"
 jq -e --arg digest "$QUATTRO_EXPECTED_DIGEST" '.status.booted.image.imageDigest == $digest' \
   "$RUN_DIR/bootc-status.json" >/dev/null

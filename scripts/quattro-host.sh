@@ -30,7 +30,9 @@ finish() {
     exit "$status"
 }
 trap finish EXIT
-df -Pk "$run" | awk 'NR==2 {exit !($4 >= 35*1024*1024)}'
+minimum_gib=35
+[[ $phase != desktop ]] || minimum_gib=5
+df -Pk "$run" | awk -v minimum_gib="$minimum_gib" 'NR==2 {exit !($4 >= minimum_gib*1024*1024)}'
 case "$phase" in
     probe)
         export RUNNER_TEMP="$run" PROBE_OUTPUT="$run/evidence/native-probe"
