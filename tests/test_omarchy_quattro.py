@@ -129,6 +129,8 @@ def test_upstream_pin_is_current_live_quattro_revision() -> None:
     assert "OMARCHY_INSTALL_BACKEND" in patch
     assert 'docker.io/archlinux/archlinux:latest' in patch
     assert 'DOCKER_ARGS+=(--network=host)' in patch
+    assert '"$build_cache_dir/packages.x86_64" | sort -u' in patch
+    assert "The signed bootc image supplies target packages" in patch
     workflow = (REPO / ".github/workflows/quattro-install-e2e.yml").read_text()
     assert "pinned-upstream-unit" in workflow
     assert 'for test in "$upstream"/test/unit/*-test.sh' in workflow
