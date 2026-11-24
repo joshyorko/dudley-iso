@@ -62,6 +62,11 @@ index aa2feb3..c3c4015 100755
 +    awk 'NF && $1 !~ /^#/ {print $1}' "$build_cache_dir/packages.x86_64" | sort -u
 +  )
 +fi
+@@ -338,0 +365,2 @@ resolve_expected_packages() {
++# Native deployment validates the signed image, not a pacstrap target closure.
++if [[ ${OMARCHY_INSTALL_BACKEND:-} != bootc ]]; then
+@@ -354,0 +383 @@ fi
++fi
 diff --git a/configs/airootfs/root/.automated_script.sh b/configs/airootfs/root/.automated_script.sh
 index 16904f8..67ef9f4 100644
 --- a/configs/airootfs/root/.automated_script.sh
