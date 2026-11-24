@@ -127,6 +127,7 @@ def test_runtime_import_is_after_mounting_the_verified_target_disk():
     assert install.index("installer.mount_ordered_layout()") < install.index("_load_embedded_runtime(ctx)")
     assert '".omarchy-installer-storage"' in backend
     assert 'f"TMPDIR={temporary}"' in backend
+    assert "installer.sanity_check(skip_ntp=True, skip_wkd=True)" in backend
 
 
 def test_native_target_uses_the_deployment_and_bootcs_exact_verity_policy(tmp_path):

@@ -252,7 +252,7 @@ def _install_system(ctx: InstallContext) -> None:
     with arch.open_installer(config, ctx.target, silent=True) as installer:
         if not pre_mounted:
             installer.mount_ordered_layout()
-        installer.sanity_check(offline=True, skip_ntp=True, skip_wkd=True)
+        installer.sanity_check(skip_ntp=True, skip_wkd=True)
         root = _sysroot_path(ctx)
         if not root.is_mount():
             raise RuntimeError(f"physical install sysroot is not mounted: {root}")
