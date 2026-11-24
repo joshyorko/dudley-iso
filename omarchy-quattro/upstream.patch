@@ -94,3 +94,11 @@ index 9b6ebf5..b3978af 100644
 +        if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":
 +            from .bootc_backend import cleanup_native_view
 +            cleanup_native_view(ctx)
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
+@@ -1011,0 +1012,4 @@ def _prepare_target_setup(ctx: InstallContext) -> None:
++    # The native image supplies its package configuration and runtime tools.
++    # Root and user finalization must not prepare a mutable pacstrap target.
++    if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":
++        return

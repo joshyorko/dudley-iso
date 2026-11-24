@@ -326,7 +326,7 @@ def test_native_contract_allows_unencrypted_deferred_provisioning() -> None:
 def test_native_filesystem_finalization_orders_fstrim_readonly_and_freeze(tmp_path: Path) -> None:
     class Result:
         returncode = 0
-        stdout = ""
+        stdout = "btrfs\n"
         stderr = ""
 
     calls = []
@@ -339,11 +339,48 @@ def test_native_filesystem_finalization_orders_fstrim_readonly_and_freeze(tmp_pa
         target = tmp_path
 
     finalize_native_filesystem(Context.target, runner)
-    assert [call[0] for call in calls] == ["fstrim", "mount", "fsfreeze", "fsfreeze"]
-    assert calls[0][1] == "--quiet-unsupported"
-    assert calls[1][1:3] == ["-o", "remount,ro"]
-    assert calls[2][1:] == ["--freeze", str(tmp_path)]
-    assert calls[3][1:] == ["--unfreeze", str(tmp_path)]
+    assert [call[0] for call in calls] == ["findmnt", "fstrim", "mount", "fsfreeze", "fsfreeze"]
+    assert calls[1][1] == "--quiet-unsupported"
+    assert calls[2][1:3] == ["-o", "remount,ro"]
+    assert calls[3][1:] == ["--freeze", str(tmp_path)]
+    assert calls[4][1:] == ["--unfreeze", str(tmp_path)]
+
+
+def test_native_finalization_flushes_separate_vfat_boot_without_freezing_it(tmp_path, monkeypatch):
+    boot = tmp_path / "boot"
+    boot.mkdir()
+    monkeypatch.setattr(Path, "is_mount", lambda path: path in (tmp_path, boot))
+    calls = []
+
+    def runner(args, **kwargs):
+        calls.append(args)
+        fstype = "vfat" if args[-1] == str(boot) else "btrfs"
+        return subprocess.CompletedProcess(args, 0, fstype + "\n", "")
+
+    finalize_native_filesystem(tmp_path, runner)
+    assert [args[0] for args in calls if args[-1] == str(boot)] == ["findmnt", "fstrim", "mount"]
+    assert [args[-1] for args in calls if args[0] == "fsfreeze"] == [str(tmp_path), str(tmp_path)]
+
+
+def test_bootc_system_setup_does_not_run_the_mutable_arch_aggregate():
+    backend = (REPO / "omarchy-quattro/bootc_backend.py").read_text()
+    assert '"/usr/bin/omarchy-apply-system"' not in backend
+    for leaf in ("config/browser-policy.sh", "config/increase-lockout-limit.sh",
+                 "config/ssh-command-path.sh", "config/ssh-keepalive.sh", "login/sddm.sh"):
+        assert leaf in backend
+    assert 'omarchy-apply-lock' not in backend
+    assert '("Finalizing user", run_chroot_finalizer)' in backend
+    patch = (REPO / "omarchy-quattro/upstream.patch").read_text()
+    assert 'def _prepare_target_setup(ctx: InstallContext)' in patch
+    assert '+    if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":' in patch
+
+
+def test_native_swap_configures_the_image_generator_without_pacstrap():
+    backend = (REPO / "omarchy-quattro/bootc_backend.py").read_text()
+    assert "installer.setup_swap(" not in backend
+    assert "usr/lib/systemd/system-generators/zram-generator" in backend
+    assert "etc/systemd/zram-generator.conf" in backend
+    assert '"systemd-zram-setup@zram0.service"' in backend
 
 
 def test_existing_iso_family_recipes_are_unchanged() -> None:

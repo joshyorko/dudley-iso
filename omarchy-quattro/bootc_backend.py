@@ -297,37 +297,50 @@ def _install_system(ctx: InstallContext) -> None:
             str(CONTAINER_TARGET),
         )
 
-        fstab = subprocess.run(["genfstab", "-U", str(ctx.target)], check=True,
-                               capture_output=True, text=True).stdout
-        _prepare_native_view(ctx)
+        _configure_native_target(ctx, config, pre_mounted)
 
-        # The installer owns only machine-local config in the physical sysroot.
-        # /usr is immutable image content and must never be overlaid by adapter
-        # writes. Validate the paths before handing control to upstream writers.
-        for mutable_dir in ("etc", "var"):
-            _sysroot_path(ctx, mutable_dir).mkdir(parents=True, exist_ok=True)
-        marker = _sysroot_path(ctx, "var", "lib", "omarchy-bootc", "installer-origin")
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("upstream-omarchy-iso\n")
-        marker.chmod(0o644)
 
-        with arch.open_installer(config, ctx.target, silent=True) as installer:
-            if not ctx.defer_provisioning and config.auth_config and config.auth_config.users:
-                installer.create_users(config.auth_config.users)
-            if config.swap and config.swap.enabled:
-                installer.setup_swap(algo=config.swap.algorithm)
-            if config.timezone:
-                installer.set_timezone(config.timezone)
-            if config.ntp:
-                installer.activate_time_synchronization()
-            if root_user := arch.root_user(config):
-                installer.set_user_password(root_user)
+def _configure_native_target(ctx: InstallContext, config: arch.ArchConfig, pre_mounted: bool) -> None:
+    """Configure the deployed composed root without partitioning or importing again."""
+    fstab = subprocess.run(["genfstab", "-U", str(ctx.target)], check=True,
+                           capture_output=True, text=True).stdout
+    _prepare_native_view(ctx)
 
-        if pre_mounted:
-            _write_pre_mounted_fstab(ctx)
-        else:
-            _sysroot_path(ctx, "etc", "fstab").write_text(fstab)
-        _sanitize_fstab(ctx)
+    # The installer owns only machine-local config in the physical sysroot.
+    # /usr is immutable image content and must never be overlaid by adapter
+    # writes. Validate the paths before handing control to upstream writers.
+    for mutable_dir in ("etc", "var"):
+        _sysroot_path(ctx, mutable_dir).mkdir(parents=True, exist_ok=True)
+    marker = _sysroot_path(ctx, "var", "lib", "omarchy-bootc", "installer-origin")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("upstream-omarchy-iso\n")
+    marker.chmod(0o644)
+
+    with arch.open_installer(config, ctx.target, silent=True) as installer:
+        if not ctx.defer_provisioning and config.auth_config and config.auth_config.users:
+            installer.create_users(config.auth_config.users)
+        if config.swap and config.swap.enabled:
+            generator = _sysroot_path(ctx, "usr/lib/systemd/system-generators/zram-generator")
+            if not os.access(generator, os.X_OK):
+                raise RuntimeError("zram swap requires zram-generator in the signed image")
+            swap_config = _sysroot_path(ctx, "etc/systemd/zram-generator.conf")
+            swap_config.parent.mkdir(parents=True, exist_ok=True)
+            swap_config.write_text(
+                "[zram0]\n" + f"compression-algorithm = {config.swap.algorithm.value}\n"
+            )
+            installer.enable_service("systemd-zram-setup@zram0.service")
+        if config.timezone:
+            installer.set_timezone(config.timezone)
+        if config.ntp:
+            installer.activate_time_synchronization()
+        if root_user := arch.root_user(config):
+            installer.set_user_password(root_user)
+
+    if pre_mounted:
+        _write_pre_mounted_fstab(ctx)
+    else:
+        _sysroot_path(ctx, "etc", "fstab").write_text(fstab)
+    _sanitize_fstab(ctx)
 
 
 def _validate_boot(ctx: InstallContext) -> None:
@@ -342,13 +355,61 @@ def _validate_boot(ctx: InstallContext) -> None:
     # validation and factory snapshot phases are intentionally not run here.
 
 
-def _run_official_system_finalizer(ctx: InstallContext) -> None:
-    """Run Omarchy's official system setup without mutating immutable /usr hooks."""
-    if ctx.defer_provisioning:
-        command = ["/usr/bin/omarchy-apply-system", "--defer-provisioning", "--first-install"]
-    else:
-        command = ["/usr/bin/omarchy-apply-system", "--install-user", ctx.username, "--first-install"]
-    _run_target_setup_command(ctx, command)
+def _configure_native_system(ctx: InstallContext) -> None:
+    """Apply only audited machine-local setup; packages and boot stay image-owned."""
+    leaves = (
+        "config/browser-policy.sh",
+        "config/increase-lockout-limit.sh",
+        "config/ssh-command-path.sh",
+        "config/ssh-keepalive.sh",
+        "config/enable-services.sh",
+        "login/sddm.sh",
+    )
+    script = r'''set -euo pipefail
+export OMARCHY_FIRST_INSTALL=1 OMARCHY_UPGRADE=0
+source "$OMARCHY_INSTALL/helpers/logging.sh"
+start_install_log
+current=$(sed -n 's/^LANG=//p' /etc/locale.conf 2>/dev/null | tail -1 | tr -d '"') || current=""
+case ${current:-C} in C|POSIX) current=C.UTF-8 ;; esac
+available=$(locale -a | tr '[:upper:]' '[:lower:]' | tr -d '._-')
+normalized=$(printf '%s' "$current" | tr '[:upper:]' '[:lower:]' | tr -d '._-')
+grep -Fxq "$normalized" <<<"$available" || { echo "Locale must be supplied by the signed image: $current" >&2; exit 1; }
+if grep -q '^LANG=' /etc/locale.conf 2>/dev/null; then
+    sed -i "s/^LANG=.*/LANG=$current/" /etc/locale.conf
+else
+    printf 'LANG=%s\n' "$current" >>/etc/locale.conf
+fi
+export LANG="$current"
+''' + "\n".join(f'run_logged "$OMARCHY_INSTALL/{leaf}"' for leaf in leaves) + r'''
+# The upstream lock helper also changes image-owned fingerprint hooks. Keep
+# its password PAM policy, without invoking those hardware/package operations.
+cat >/etc/pam.d/omarchy-lock-password <<'PAM'
+#%PAM-1.0
+auth       required                    pam_faillock.so preauth silent deny=10 unlock_time=120
+-auth      [success=2 default=ignore]  pam_systemd_home.so
+auth       [success=1 default=bad]     pam_unix.so try_first_pass nullok
+auth       [default=die]               pam_faillock.so authfail deny=10 unlock_time=120
+auth       optional                    pam_permit.so
+auth       required                    pam_env.so
+auth       required                    pam_faillock.so authsucc
+account    include                     system-local-login
+PAM
+chmod 0644 /etc/pam.d/omarchy-lock-password
+for unit in limine-snapper-sync.service snapper-cleanup.timer snapper-timeline.timer; do
+    [[ $(systemctl is-enabled "$unit" 2>/dev/null || true) == masked ]]
+done
+grep -Fxq ENABLED=yes /etc/ufw/ufw.conf
+stop_install_log
+'''
+    _run_target_setup_command(ctx, ["/usr/bin/bash", "-euc", script])
+    receipt = _sysroot_path(ctx, "var/lib/omarchy-bootc/native-system-setup.json")
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.write_text(json.dumps({
+        "schema": "omarchy-bootc.native-system-setup/v1",
+        "upstream_mutable_leaves": leaves,
+        "package_and_hardware_setup": "supplied by the signed image",
+        "boot_ownership": "bootc-composefs",
+    }, indent=2) + "\n")
 
 
 def build_phases(ctx: InstallContext):
@@ -360,7 +421,7 @@ def build_phases(ctx: InstallContext):
         ("Preparing install target", prepare_install_target),
         ("Installing Arch + Omarchy", _install_system),
         ("Staging provisioning", stage_provisioning_state),
-        ("Configuring system", _run_official_system_finalizer),
+        ("Configuring system", _configure_native_system),
         ("Finalizing user", run_chroot_finalizer),
         ("Configuring login", configure_login),
         ("Configuring SSH access", configure_ssh_access),
