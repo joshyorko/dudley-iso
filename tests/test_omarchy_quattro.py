@@ -100,6 +100,7 @@ def test_upstream_pin_is_current_live_quattro_revision() -> None:
     assert "bin/omarchy-iso-make" in patch
     assert "builder/build-iso.sh" in patch
     assert "OMARCHY_INSTALL_BACKEND" in patch
+    assert 'docker.io/archlinux/archlinux:latest' in patch
     workflow = (REPO / ".github/workflows/quattro-install-e2e.yml").read_text()
     assert "pinned-upstream-unit" in workflow
     assert 'for test in "$upstream"/test/unit/*-test.sh' in workflow
