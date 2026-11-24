@@ -4,6 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+import hashlib
+import json
+import re
+
+
+def verified_archive_config(raw_manifest: str, expected_digest: str) -> str:
+    """Bind runtime config identity to the unchanged accepted OCI manifest."""
+    if "sha256:" + hashlib.sha256(raw_manifest.encode()).hexdigest() != expected_digest:
+        raise RuntimeError("embedded archive manifest differs from accepted digest")
+    config = json.loads(raw_manifest).get("config", {}).get("digest", "")
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", config):
+        raise RuntimeError("embedded archive manifest has no valid runtime config")
+    return config
 
 
 def _has_encryption(value: Any) -> bool:

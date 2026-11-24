@@ -47,7 +47,7 @@ index aa2feb3..c3c4015 100755
 +fi
 @@ -121,0 +139,3 @@ arch_packages=(linux-t2 git gum jq openssl plymouth ttfx tzupdate omarchy-keyrin
 +if [[ ${OMARCHY_INSTALL_BACKEND:-} == bootc ]]; then
-+  arch_packages+=(podman btrfs-progs)
++  arch_packages+=(podman skopeo btrfs-progs)
 +fi
 diff --git a/configs/airootfs/root/.automated_script.sh b/configs/airootfs/root/.automated_script.sh
 index 16904f8..67ef9f4 100644

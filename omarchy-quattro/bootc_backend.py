@@ -20,7 +20,7 @@ from pathlib import Path
 from . import archinstall_adapter as arch
 from .context import InstallContext
 from .native_finalize import finalize_native_filesystem as _finalize_native_filesystem
-from .native_contract import validate_native_install_contract
+from .native_contract import validate_native_install_contract, verified_archive_config
 from .phases_impl import (
     configure_dns_resolver,
     configure_login,
@@ -37,7 +37,6 @@ from .phases_impl import (
 from .ui import info
 
 
-EMBEDDED_IMAGE_REF = "localhost/omarchy-quattro:embedded"
 EMBEDDED_ARCHIVE = Path(os.environ.get(
     "OMARCHY_BOOTC_IMAGE_ARCHIVE", "/var/cache/omarchy/bootc/quattro.oci.tar"
 ))
@@ -103,6 +102,13 @@ def verify_embedded_image(ctx: InstallContext) -> None:
         actual_archive_sha = hashlib.file_digest(stream, "sha256").hexdigest()
     if not receipt or receipt[0] != actual_archive_sha:
         raise RuntimeError("embedded Quattro OCI archive checksum mismatch")
+    manifest = subprocess.run(
+        ["skopeo", "inspect", "--raw", f"oci-archive:{EMBEDDED_ARCHIVE}"],
+        check=False, capture_output=True, text=True,
+    )
+    if manifest.returncode:
+        raise RuntimeError("could not inspect the embedded archive manifest")
+    runtime_id = verified_archive_config(manifest.stdout, match.group(1))
     load = subprocess.run(
         ["podman", "load", "--input", str(EMBEDDED_ARCHIVE)],
         check=False, capture_output=True, text=True,
@@ -110,12 +116,13 @@ def verify_embedded_image(ctx: InstallContext) -> None:
     if load.returncode:
         raise RuntimeError("could not load the embedded Quattro image archive")
     inspect = subprocess.run(
-        ["podman", "image", "inspect", EMBEDDED_IMAGE_REF, "--format", "{{.Digest}}"],
+        ["podman", "image", "inspect", runtime_id, "--format", "{{.Id}}"],
         check=False, capture_output=True, text=True,
     )
-    if inspect.returncode or inspect.stdout.strip() != match.group(1):
-        raise RuntimeError("loaded embedded image digest does not match the accepted source digest")
+    if inspect.returncode or "sha256:" + inspect.stdout.strip().removeprefix("sha256:") != runtime_id:
+        raise RuntimeError("loaded runtime config does not match accepted archive manifest")
     ctx.state["omarchy_bootc_image_loaded"] = True
+    ctx.state["omarchy_bootc_runtime_id"] = runtime_id
 
 
 def _sysroot_path(ctx: InstallContext, *parts: str) -> Path:
@@ -139,7 +146,7 @@ def _run_embedded(ctx: InstallContext, *args: str) -> subprocess.CompletedProces
         "--volume", "/var/lib/containers:/var/lib/containers",
         "--volume", f"{ctx.target}:{ctx.target}",
         "--volume", f"{EMBEDDED_ARCHIVE}:/run/omarchy-bootc/quattro.oci.tar:ro",
-        EMBEDDED_IMAGE_REF,
+        ctx.state["omarchy_bootc_runtime_id"],
         *args,
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)

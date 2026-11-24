@@ -23,14 +23,16 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT
-sudo -n podman pull "$ref" 2>&1 | tee "$PROBE_OUTPUT/pull.log"
-sudo -n podman image inspect "$ref" | tee "$PROBE_OUTPUT/image-inspect.json" >/dev/null
-jq -e --arg digest "${ref##*@}" --arg sha "$source_sha" \
-    '.[0].Digest == $digest and .[0].Labels["org.opencontainers.image.revision"] == $sha' \
-    "$PROBE_OUTPUT/image-inspect.json" >/dev/null
-sudo -n skopeo copy --preserve-digests "containers-storage:$ref" "oci-archive:$work/source.oci.tar:quattro-probe"
+sudo -n skopeo copy --preserve-digests "docker://$ref" "oci-archive:$work/source.oci.tar:quattro-probe" \
+    2>&1 | tee "$PROBE_OUTPUT/registry-copy.log"
 sudo -n skopeo inspect --raw "oci-archive:$work/source.oci.tar" | tee "$PROBE_OUTPUT/archive-manifest.json" >/dev/null
 [[ $(skopeo manifest-digest "$PROBE_OUTPUT/archive-manifest.json") == "${ref##*@}" ]]
+runtime_id=$(jq -er '.config.digest | select(test("^sha256:[a-f0-9]{64}$"))' "$PROBE_OUTPUT/archive-manifest.json")
+sudo -n podman load --input "$work/source.oci.tar" 2>&1 | tee "$PROBE_OUTPUT/load.log"
+sudo -n podman image inspect "$runtime_id" | tee "$PROBE_OUTPUT/image-inspect.json" >/dev/null
+jq -e --arg id "$runtime_id" --arg sha "$source_sha" \
+    '(.[0].Id | sub("^sha256:"; "") | "sha256:" + .) == $id and .[0].Labels["org.opencontainers.image.revision"] == $sha' \
+    "$PROBE_OUTPUT/image-inspect.json" >/dev/null
 truncate -s 48G "$work/disk.raw"
 parted -s "$work/disk.raw" mklabel gpt mkpart ESP fat32 1MiB 1025MiB set 1 esp on mkpart ROOT btrfs 1025MiB 100%
 loop=$(sudo -n losetup --find --show --partscan "$work/disk.raw")
@@ -45,7 +47,7 @@ sudo -n podman run --rm --privileged --pid=host --ipc=host --userns=host \
     --network=host --security-opt label=disable \
     -v /dev:/dev -v /run:/run -v /sys:/sys:ro \
     -v /var/lib/containers:/var/lib/containers -v "$work:$work:rshared" \
-    "$ref" bootc install to-filesystem \
+    "$runtime_id" bootc install to-filesystem \
     --source-imgref "oci-archive:$work/source.oci.tar" \
     --target-imgref ghcr.io/joshyorko/omarchy-bootc:testing \
     --composefs-backend --bootloader systemd --generic-image \

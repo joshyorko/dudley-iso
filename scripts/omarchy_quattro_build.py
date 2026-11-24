@@ -113,6 +113,14 @@ def verify_pulled_digest(expected_digest: str, actual_digest: str) -> None:
         raise ValueError(f"pulled image digest mismatch: expected {expected_digest}, got {actual_digest}")
 
 
+def export_verified_archive(source_ref: str, archive: Path) -> None:
+    """Copy original compressed layers, never re-export a decompressed store."""
+    _run(["skopeo", "copy", "--preserve-digests", f"docker://{source_ref}",
+          f"oci-archive:{archive}:localhost/omarchy-quattro:embedded"])
+    raw = _run(["skopeo", "inspect", "--raw", f"oci-archive:{archive}"], capture=True)
+    verify_pulled_digest(source_ref.rsplit("@", 1)[1], "sha256:" + hashlib.sha256(raw.encode()).hexdigest())
+
+
 def _run(args: list[str], *, cwd: Path | None = None, capture: bool = False) -> str:
     result = subprocess.run(
         args,
@@ -195,12 +203,6 @@ def build() -> tuple[Path, Path]:
         digest,
         source_sha,
     )
-    _run(["podman", "pull", source_ref])
-    actual_digest = _run(
-        ["podman", "image", "inspect", source_ref, "--format", "{{.Digest}}"], capture=True
-    ).strip()
-    verify_pulled_digest(digest, actual_digest)
-
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="build.", dir=OUTPUT_DIR) as temporary:
         temporary_dir = Path(temporary)
@@ -212,11 +214,7 @@ def build() -> tuple[Path, Path]:
         prepare_upstream_adapter(source_dir)
 
         archive = temporary_dir / "omarchy-quattro-image.oci.tar"
-        tagged = "localhost/omarchy-quattro:embedded"
-        _run(["podman", "tag", source_ref, tagged])
-        _run(["skopeo", "copy", "--preserve-digests", f"containers-storage:{tagged}", f"oci-archive:{archive}:{tagged}"])
-        raw_manifest = _run(["skopeo", "inspect", "--raw", f"oci-archive:{archive}"], capture=True)
-        verify_pulled_digest(digest, "sha256:" + hashlib.sha256(raw_manifest.encode()).hexdigest())
+        export_verified_archive(source_ref, archive)
         checksum_file = temporary_dir / "omarchy-quattro-image.oci.tar.sha256"
         checksum_file.write_text(file_sha256(archive) + "  " + archive.name + "\n")
         verify_archive(archive, checksum_file)

@@ -195,3 +195,30 @@ def test_existing_iso_family_recipes_are_unchanged() -> None:
             text=True,
         )
         assert f'iso-sd-boot "{target}"' in result.stderr
+
+
+def test_archive_export_keeps_original_registry_layers(monkeypatch, tmp_path):
+    import hashlib
+    from scripts import omarchy_quattro_build as builder
+    raw = json.dumps({'config': {'digest': 'sha256:' + 'b' * 64}})
+    digest = 'sha256:' + hashlib.sha256(raw.encode()).hexdigest()
+    ref = 'ghcr.io/joshyorko/omarchy-bootc@' + digest
+    archive = tmp_path/'image.oci.tar'
+    calls = []
+    def transport(args, **kwargs):
+        calls.append(args)
+        if args[1] == 'copy':
+            if args[3].startswith('containers-storage:'):
+                raise RuntimeError('changing layer representation: Instructed to preserve digests')
+            assert args[2] == '--preserve-digests' and args[3].startswith('docker://ghcr.io/joshyorko/omarchy-bootc@sha256:')
+            return ''
+        return raw
+    monkeypatch.setattr(builder, '_run', transport)
+    builder.export_verified_archive(ref, archive)
+    assert len(calls) == 2
+    assert calls[0][3] == 'docker://' + ref
+    assert NATIVE_CONTRACT.verified_archive_config(raw, digest) == 'sha256:' + 'b' * 64
+    with pytest.raises(RuntimeError, match='manifest differs'):
+        NATIVE_CONTRACT.verified_archive_config(raw + '\n', digest)
+    with pytest.raises(ValueError, match='digest mismatch'):
+        builder.export_verified_archive(ref.rsplit('@', 1)[0] + '@sha256:' + 'c' * 64, archive)
