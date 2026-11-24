@@ -115,8 +115,12 @@ def verify_pulled_digest(expected_digest: str, actual_digest: str) -> None:
 
 def export_verified_archive(source_ref: str, archive: Path) -> None:
     """Copy original compressed layers, never re-export a decompressed store."""
-    _run(["skopeo", "copy", "--preserve-digests", f"docker://{source_ref}",
-          f"oci-archive:{archive}:localhost/omarchy-quattro:embedded"])
+    cached = os.environ.get("OMARCHY_BOOTC_SOURCE_ARCHIVE")
+    if cached:
+        shutil.copyfile(cached, archive)
+    else:
+        _run(["skopeo", "copy", "--preserve-digests", f"docker://{source_ref}",
+              f"oci-archive:{archive}:localhost/omarchy-quattro:embedded"])
     raw = _run(["skopeo", "inspect", "--raw", f"oci-archive:{archive}"], capture=True)
     verify_pulled_digest(source_ref.rsplit("@", 1)[1], "sha256:" + hashlib.sha256(raw.encode()).hexdigest())
 

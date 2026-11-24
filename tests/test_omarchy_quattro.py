@@ -1,11 +1,13 @@
 """Contract tests for the isolated Quattro installer build."""
 
 import json
+import hashlib
 import importlib.util
 import subprocess
 from pathlib import Path
 
 import pytest
+from scripts import omarchy_quattro_build as builder
 
 from scripts.omarchy_quattro_build import (
     IMAGE_CONFIG,
@@ -21,6 +23,39 @@ from scripts.native_finalize import finalize_native_filesystem
 
 
 REPO = Path(__file__).parents[1]
+
+
+def test_probe_mounts_work_under_existing_container_run_directory() -> None:
+    probe = (REPO / "scripts/probe-quattro-filesystem.sh").read_text()
+    assert '-v "$work:/run/quattro-probe:rshared"' in probe
+    assert 'oci-archive:/run/quattro-probe/source.oci.tar' in probe
+    assert '--skip-finalize /run/quattro-probe/target' in probe
+    assert '-v "$work:$work:rshared"' not in probe
+
+
+@pytest.mark.parametrize("tampered", [False, True])
+def test_cached_archive_still_requires_exact_signed_manifest(tmp_path, monkeypatch, tampered):
+    cached = tmp_path / "cached.oci.tar"
+    cached.write_bytes(b"original compressed archive")
+    destination = tmp_path / "embedded.oci.tar"
+    raw = '{"config":{"digest":"sha256:' + "b" * 64 + '"}}'
+    digest = "0" * 64 if tampered else hashlib.sha256(raw.encode()).hexdigest()
+    monkeypatch.setenv("OMARCHY_BOOTC_SOURCE_ARCHIVE", str(cached))
+
+    def inspect(args, *, capture=False):
+        assert args == ["skopeo", "inspect", "--raw", f"oci-archive:{destination}"]
+        assert capture
+        return raw
+
+    monkeypatch.setattr(builder, "_run", inspect)
+    if tampered:
+        with pytest.raises(ValueError, match="digest mismatch"):
+            builder.export_verified_archive(f"{builder.IMAGE_NAME}@sha256:{digest}", destination)
+    else:
+        builder.export_verified_archive(f"{builder.IMAGE_NAME}@sha256:{digest}", destination)
+        assert destination.read_bytes() == cached.read_bytes()
+
+
 CONTRACT_SPEC = importlib.util.spec_from_file_location(
     "quattro_native_contract", REPO / "omarchy-quattro/native_contract.py"
 )

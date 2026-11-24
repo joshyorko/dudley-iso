@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Deployment-boundary experiment on an ephemeral GitHub runner, NOT acceptance.
+# Deployment-boundary experiment on an owned disposable disk, NOT acceptance.
 set -euo pipefail
-[[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted ]] || {
-    echo 'Native deployment probe is GitHub-hosted only' >&2; exit 2;
-}
+if [[ ${OMARCHY_REMOTE_BUILDER:-} == harvester ]]; then
+    [[ $(hostname) == devsy-shared-harvester-c577d ]] || exit 2
+elif [[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_ENVIRONMENT:-} != github-hosted ]]; then
+    echo 'Native deployment probe requires the owned Harvester or GitHub-hosted runner' >&2; exit 2
+fi
 : "${RUNNER_TEMP:?}" "${PROBE_OUTPUT:?}"
 ref=ghcr.io/joshyorko/omarchy-bootc@sha256:aca01a25953209b1e38b8aa115fe253283153f159f6f28defaede9c528476386
 source_sha=65a8e151b0bb44762a8cb1b9bdebd03c3a874296
@@ -46,12 +48,12 @@ sudo -n mount "${loop}p1" "$work/target/boot/efi"
 sudo -n podman run --rm --privileged --pid=host --ipc=host --userns=host \
     --network=host --security-opt label=disable \
     -v /dev:/dev -v /run:/run -v /sys:/sys:ro \
-    -v /var/lib/containers:/var/lib/containers -v "$work:$work:rshared" \
+    -v /var/lib/containers:/var/lib/containers -v "$work:/run/quattro-probe:rshared" \
     "$runtime_id" bootc install to-filesystem \
-    --source-imgref "oci-archive:$work/source.oci.tar" \
+    --source-imgref oci-archive:/run/quattro-probe/source.oci.tar \
     --target-imgref ghcr.io/joshyorko/omarchy-bootc:testing \
     --composefs-backend --bootloader systemd --generic-image \
-    --skip-fetch-check --skip-finalize "$work/target" \
+    --skip-fetch-check --skip-finalize /run/quattro-probe/target \
     2>&1 | tee "$PROBE_OUTPUT/install.log"
 sudo -n find "$work/target" -maxdepth 5 -printf '%y %P -> %l\n' | tee "$PROBE_OUTPUT/target-layout.txt" >/dev/null
 sudo -n findmnt --json --submounts "$work/target" | tee "$PROBE_OUTPUT/target-mounts.json" >/dev/null

@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Boot the genuine ISO with no cidata/config answers and retain actual pixels.
 set -euo pipefail
-[[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted ]] || exit 2
+if [[ ${OMARCHY_REMOTE_BUILDER:-} == harvester ]]; then
+    [[ $(hostname) == devsy-shared-harvester-c577d ]] || exit 2
+elif [[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_ENVIRONMENT:-} != github-hosted ]]; then
+    exit 2
+fi
 iso=$(realpath "${1:?ISO path required}")
 : "${RUNNER_TEMP:?}" "${CAPTURE_HELPER:?}"
 out=output/omarchy-quattro/interactive-live
@@ -47,9 +51,9 @@ for path in sorted(out.glob('*.png')):
                     'captured_at':datetime.fromtimestamp(path.stat().st_mtime,timezone.utc).isoformat(),
                     'stage':'actual firmware/official live UI observation; requires visual review'})
 (out/'manifest.json').write_text(json.dumps({'scope':'Actual KVM ISO boot without cidata or injected answers; not installed-system proof',
- 'builder_sha':os.environ['GITHUB_SHA'],'payload_source':'65a8e151b0bb44762a8cb1b9bdebd03c3a874296',
+ 'builder_sha':os.environ.get('QUATTRO_SOURCE_SHA',os.environ.get('GITHUB_SHA')),'payload_source':'65a8e151b0bb44762a8cb1b9bdebd03c3a874296',
  'payload_digest':'sha256:aca01a25953209b1e38b8aa115fe253283153f159f6f28defaede9c528476386',
- 'iso_sha256':digest,'run_id':os.environ['GITHUB_RUN_ID'],'job':os.environ['GITHUB_JOB'],
+ 'iso_sha256':digest,'run_id':os.environ.get('QUATTRO_RUN_ID',os.environ.get('GITHUB_RUN_ID')),'job':os.environ.get('GITHUB_JOB','harvester-live'),
  'recorded_at':datetime.now(timezone.utc).isoformat(),'screenshots':entries,
  'disk_account_questions_completed':False,'installed_desktop_qualified':False},indent=2)+'\n')
 PY
