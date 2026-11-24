@@ -2,6 +2,8 @@
 
 import json
 import hashlib
+import io
+import tarfile
 import importlib.util
 import subprocess
 from pathlib import Path
@@ -89,6 +91,42 @@ CONTRACT_SPEC = importlib.util.spec_from_file_location(
 assert CONTRACT_SPEC and CONTRACT_SPEC.loader
 NATIVE_CONTRACT = importlib.util.module_from_spec(CONTRACT_SPEC)
 CONTRACT_SPEC.loader.exec_module(NATIVE_CONTRACT)
+
+
+@pytest.mark.parametrize("wrong_index", [False, True])
+def test_archive_identity_is_read_without_extracting_layers(tmp_path, monkeypatch, wrong_index):
+    raw = json.dumps({"config": {"digest": "sha256:" + "b" * 64}}).encode()
+    digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+    archive = tmp_path / "image.oci.tar"
+    index = json.dumps({"manifests": [{"digest": "sha256:" + "0" * 64 if wrong_index else digest}]}).encode()
+    with tarfile.open(archive, "w") as source:
+        for name, data in [("index.json", index), ("blobs/sha256/" + digest[7:], raw)]:
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            source.addfile(member, io.BytesIO(data))
+
+    def forbid_extraction(*args, **kwargs):
+        raise AssertionError("verification must not extract archive files onto the live filesystem")
+
+    monkeypatch.setattr(tarfile.TarFile, "extract", forbid_extraction)
+    monkeypatch.setattr(tarfile.TarFile, "extractall", forbid_extraction)
+    if wrong_index:
+        with pytest.raises(RuntimeError, match="index"):
+            NATIVE_CONTRACT.verified_archive_tar_config(archive, digest)
+    else:
+        assert NATIVE_CONTRACT.verified_archive_tar_config(archive, digest) == "sha256:" + "b" * 64
+    assert list(tmp_path.iterdir()) == [archive]
+
+
+def test_runtime_import_is_after_mounting_the_verified_target_disk():
+    backend = (REPO / "omarchy-quattro/bootc_backend.py").read_text()
+    verify = backend.split("def verify_embedded_image", 1)[1].split("\ndef ", 1)[0]
+    assert '"podman", "load"' not in verify
+    assert "verified_archive_tar_config" in verify
+    install = backend.split("def _install_system", 1)[1].split("\ndef ", 1)[0]
+    assert install.index("installer.mount_ordered_layout()") < install.index("_load_embedded_runtime(ctx)")
+    assert '".omarchy-installer-storage"' in backend
+    assert 'f"TMPDIR={temporary}"' in backend
 
 
 def test_native_target_uses_the_deployment_and_bootcs_exact_verity_policy(tmp_path):

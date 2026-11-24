@@ -12,13 +12,14 @@ import os
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 from . import archinstall_adapter as arch
 from .context import InstallContext
 from .native_finalize import finalize_native_filesystem as _finalize_native_filesystem
-from .native_contract import native_composefs_cmdline, validate_native_install_contract, verified_archive_config
+from .native_contract import native_composefs_cmdline, validate_native_install_contract, verified_archive_tar_config
 from .phases_impl import (
     configure_dns_resolver,
     configure_login,
@@ -100,27 +101,42 @@ def verify_embedded_image(ctx: InstallContext) -> None:
         actual_archive_sha = hashlib.file_digest(stream, "sha256").hexdigest()
     if not receipt or receipt[0] != actual_archive_sha:
         raise RuntimeError("embedded Quattro OCI archive checksum mismatch")
-    manifest = subprocess.run(
-        ["skopeo", "inspect", "--raw", f"oci-archive:{EMBEDDED_ARCHIVE}"],
-        check=False, capture_output=True, text=True,
-    )
-    if manifest.returncode:
-        raise RuntimeError("could not inspect the embedded archive manifest")
-    runtime_id = verified_archive_config(manifest.stdout, match.group(1))
+    ctx.state["omarchy_bootc_runtime_id"] = verified_archive_tar_config(EMBEDDED_ARCHIVE, match.group(1))
+    ctx.state["omarchy_bootc_archive_verified"] = True
+
+
+def _load_embedded_runtime(ctx: InstallContext) -> None:
+    if not ctx.state.get("omarchy_bootc_archive_verified"):
+        raise RuntimeError("embedded archive was not verified before target preparation")
+    store = _sysroot_path(ctx, ".omarchy-installer-storage")
+    if store.exists():
+        raise RuntimeError("target already contains an installer runtime store")
+    store.mkdir(mode=0o700)
+    temporary = store / "tmp"
+    temporary.mkdir(mode=0o700)
+    runroot = Path("/run/omarchy-bootc/podman")
+    runroot.mkdir(parents=True, exist_ok=True)
+    command = ["env", f"TMPDIR={temporary}", "podman", "--root", str(store),
+               "--runroot", str(runroot), "--storage-driver=overlay"]
+    ctx.state["omarchy_bootc_runtime_command"] = command
+    ctx.state["omarchy_bootc_runtime_store"] = store
     load = subprocess.run(
-        ["podman", "load", "--input", str(EMBEDDED_ARCHIVE)],
+        [*command, "load", "--input", str(EMBEDDED_ARCHIVE)],
         check=False, capture_output=True, text=True,
     )
     if load.returncode:
+        ctx.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with ctx.log_path.open("a", encoding="utf-8") as log:
+            log.write(load.stdout + load.stderr)
         raise RuntimeError("could not load the embedded Quattro image archive")
+    runtime_id = ctx.state["omarchy_bootc_runtime_id"]
     inspect = subprocess.run(
-        ["podman", "image", "inspect", runtime_id, "--format", "{{.Id}}"],
+        [*command, "image", "inspect", runtime_id, "--format", "{{.Id}}"],
         check=False, capture_output=True, text=True,
     )
     if inspect.returncode or "sha256:" + inspect.stdout.strip().removeprefix("sha256:") != runtime_id:
         raise RuntimeError("loaded runtime config does not match accepted archive manifest")
     ctx.state["omarchy_bootc_image_loaded"] = True
-    ctx.state["omarchy_bootc_runtime_id"] = runtime_id
 
 
 def _sysroot_path(ctx: InstallContext, *parts: str) -> Path:
@@ -140,7 +156,7 @@ def _run_embedded(ctx: InstallContext, *args: str) -> subprocess.CompletedProces
     runtime_dir = Path("/run/omarchy-bootc")
     runtime_dir.mkdir(parents=True, exist_ok=True)
     command = [
-        "podman", "run", "--rm", "--privileged", "--pid=host", "--ipc=host",
+        *ctx.state["omarchy_bootc_runtime_command"], "run", "--rm", "--privileged", "--pid=host", "--ipc=host",
         "--userns=host", "--network=host", "--security-opt", "label=disable",
         "--volume", "/dev:/dev", "--volume", "/run:/run", "--volume", "/sys:/sys:ro",
         "--volume", "/var/lib/containers:/var/lib/containers",
@@ -201,6 +217,10 @@ def cleanup_native_view(ctx: InstallContext) -> None:
 
 def _finish_native_filesystem(ctx: InstallContext) -> None:
     cleanup_native_view(ctx)
+    subprocess.run([*ctx.state["omarchy_bootc_runtime_command"], "image", "rm", "--force",
+                    ctx.state["omarchy_bootc_runtime_id"]], check=True, capture_output=True, text=True)
+    shutil.rmtree(ctx.state["omarchy_bootc_runtime_store"])
+    ctx.state["omarchy_bootc_image_loaded"] = False
     _finalize_native_filesystem(ctx.target)
 
 
@@ -219,6 +239,8 @@ def _sanitize_fstab(ctx: InstallContext) -> None:
 
 
 def _install_system(ctx: InstallContext) -> None:
+    if not ctx.state.get("omarchy_bootc_archive_verified"):
+        raise RuntimeError("embedded archive was not verified before disk mutation")
     handler = ctx.state["arch_config_handler"]
     config = handler.config
     pre_mounted = arch.is_pre_mount(config)
@@ -232,8 +254,10 @@ def _install_system(ctx: InstallContext) -> None:
             installer.mount_ordered_layout()
         installer.sanity_check(offline=True, skip_ntp=True, skip_wkd=True)
         root = _sysroot_path(ctx)
-        if not root.is_dir():
+        if not root.is_mount():
             raise RuntimeError(f"physical install sysroot is not mounted: {root}")
+
+        _load_embedded_runtime(ctx)
 
         info("› deploying the pinned offline Quattro image with native composefs")
         _run_embedded(

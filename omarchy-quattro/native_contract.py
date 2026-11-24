@@ -7,6 +7,7 @@ from typing import Any
 import hashlib
 import json
 import re
+import tarfile
 from pathlib import Path
 
 
@@ -18,6 +19,28 @@ def verified_archive_config(raw_manifest: str, expected_digest: str) -> str:
     if not re.fullmatch(r"sha256:[a-f0-9]{64}", config):
         raise RuntimeError("embedded archive manifest has no valid runtime config")
     return config
+
+
+def verified_archive_tar_config(archive: Path, expected_digest: str) -> str:
+    """Read bounded OCI metadata without unpacking layers into the live RAM disk."""
+    try:
+        with tarfile.open(archive, "r:") as source:
+            def metadata(name: str) -> bytes:
+                member = source.getmember(name)
+                if not member.isfile() or member.size > 4 * 1024 * 1024:
+                    raise RuntimeError("embedded OCI metadata is not a bounded regular file")
+                with source.extractfile(member) as payload:
+                    return payload.read()
+
+            index = json.loads(metadata("index.json"))
+            manifests = index.get("manifests") if isinstance(index, dict) else None
+            if (not isinstance(manifests, list) or len(manifests) != 1
+                    or not isinstance(manifests[0], dict) or manifests[0].get("digest") != expected_digest):
+                raise RuntimeError("embedded archive index differs from the accepted manifest")
+            raw = metadata("blobs/sha256/" + expected_digest.removeprefix("sha256:")).decode("utf-8")
+            return verified_archive_config(raw, expected_digest)
+    except (OSError, tarfile.TarError, KeyError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("embedded OCI archive metadata is malformed") from exc
 
 
 def _has_encryption(value: Any) -> bool:
