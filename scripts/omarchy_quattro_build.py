@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import base64
+import argparse
+import ast
 import json
 import os
 import re
@@ -56,12 +58,25 @@ def verify_signer_status(returncode: int, detail: str) -> None:
 
 
 def verify_attestation_status(
-    returncode: int, detail: str, expected_ref: str, expected_digest: str
+    returncode: int, detail: str, expected_ref: str, expected_digest: str, expected_source_sha: str
 ) -> list[dict[str, object]]:
     if returncode:
         raise ValueError(f"image attestation verification failed: {detail.strip()}")
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_source_sha):
+        raise ValueError("accepted image source SHA must be exact")
     try:
-        attestations = json.loads(detail)
+        # Cosign emits individual verified DSSE envelopes, not necessarily an
+        # array. Parse the complete stream so trailing garbage fails closed.
+        decoder = json.JSONDecoder()
+        remaining = detail.strip()
+        attestations = []
+        while remaining:
+            value, end = decoder.raw_decode(remaining)
+            entries = value if isinstance(value, list) else [value]
+            if not all(isinstance(entry, dict) for entry in entries):
+                raise ValueError("image attestation contains a non-envelope value")
+            attestations.extend(entries)
+            remaining = remaining[end:].lstrip()
     except json.JSONDecodeError as exc:
         raise ValueError("image attestation verification returned malformed JSON") from exc
     if not isinstance(attestations, list) or not attestations:
@@ -80,6 +95,7 @@ def verify_attestation_status(
             isinstance(predicate, dict)
             and predicate.get("schema") == "omarchy-bootc.published-image/v1"
             and predicate.get("image") == expected_image
+            and predicate.get("source_sha") == expected_source_sha
             and predicate.get("oci_manifest_digest") == expected_digest_ref
             and predicate.get("acceptance_overlay") == "not-applied"
         ):
@@ -107,9 +123,36 @@ def _run(args: list[str], *, cwd: Path | None = None, capture: bool = False) -> 
     return result.stdout or ""
 
 
+def prepare_upstream_adapter(source_dir: Path) -> None:
+    """Apply only the deployment seam to the exact official source, without images."""
+    if _run(["git", "rev-parse", "HEAD"], cwd=source_dir, capture=True).strip() != UPSTREAM_REVISION:
+        raise ValueError("upstream checkout does not match the reviewed installer revision")
+    _run(["git", "diff", "--exit-code", "HEAD"], cwd=source_dir, capture=True)
+    surfaces = ["bin/omarchy-iso-configurator", "configs/airootfs/root/configurator",
+                "configs/airootfs/usr/local/bin/omarchy-install-dashboard"]
+    originals = {name: (source_dir / name).read_bytes() for name in surfaces}
+    _run(["git", "apply", "--unidiff-zero", str(REPO / "omarchy-quattro/upstream.patch")], cwd=source_dir)
+    directory = source_dir / "configs/airootfs/usr/share/omarchy-iso/orchestrator"
+    for source, name in [(REPO / "omarchy-quattro/bootc_backend.py", "bootc_backend.py"),
+                         (REPO / "scripts/native_finalize.py", "native_finalize.py"),
+                         (REPO / "omarchy-quattro/native_contract.py", "native_contract.py")]:
+        shutil.copy2(source, directory / name)
+        ast.parse((directory / name).read_text())
+    ast.parse((directory / "main.py").read_text())
+    changed = set(_run(["git", "diff", "--name-only"], cwd=source_dir, capture=True).splitlines())
+    allowed = {"bin/omarchy-iso-make", "builder/build-iso.sh", "configs/airootfs/root/.automated_script.sh",
+               "configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py"}
+    if changed - allowed or any((source_dir / name).read_bytes() != data for name, data in originals.items()):
+        raise ValueError("adapter modified an official UI surface outside the deployment seam")
+    _run(["git", "diff", "--check"], cwd=source_dir)
+
+
 def build() -> tuple[Path, Path]:
     config = json.loads(IMAGE_CONFIG.read_text())
     source_ref, digest, identity, issuer = verify_image_config(config)
+    source_sha = config.get("accepted_source_sha", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        raise ValueError("accepted image source SHA must be exact")
     for tool in ("git", "podman", "cosign", "sha256sum"):
         if not shutil.which(tool):
             raise RuntimeError(f"{tool} is required")
@@ -145,6 +188,7 @@ def build() -> tuple[Path, Path]:
         attestation.stdout or attestation.stderr,
         source_ref,
         digest,
+        source_sha,
     )
     _run(["podman", "pull", source_ref])
     actual_digest = _run(
@@ -160,18 +204,7 @@ def build() -> tuple[Path, Path]:
               "--no-checkout", UPSTREAM_URL, str(source_dir)])
         _run(["git", "checkout", "--detach", UPSTREAM_REVISION], cwd=source_dir)
         _run(["git", "submodule", "update", "--init", "--recursive", "--jobs=8"], cwd=source_dir)
-        _run(["git", "apply", "--unidiff-zero", str(REPO / "omarchy-quattro/upstream.patch")], cwd=source_dir)
-        overlay = source_dir / "configs/airootfs/usr/share/omarchy-iso/orchestrator/bootc_backend.py"
-        shutil.copy2(REPO / "omarchy-quattro/bootc_backend.py", overlay)
-        shutil.copy2(
-            REPO / "scripts/native_finalize.py",
-            overlay.with_name("native_finalize.py"),
-        )
-        shutil.copy2(
-            REPO / "omarchy-quattro/native_contract.py",
-            overlay.with_name("native_contract.py"),
-        )
-        _run(["git", "diff", "--check"], cwd=source_dir)
+        prepare_upstream_adapter(source_dir)
 
         archive = temporary_dir / "omarchy-quattro-image.oci.tar"
         tagged = "localhost/omarchy-quattro:embedded"
@@ -185,6 +218,7 @@ def build() -> tuple[Path, Path]:
             "schema": "omarchy-bootc.image-signature/v1",
             "source_ref": source_ref,
             "source_digest": digest,
+            "source_sha": source_sha,
             "certificate_identity": identity,
             "certificate_oidc_issuer": issuer,
             "verified_signatures": verified_signatures,
@@ -222,7 +256,14 @@ def build() -> tuple[Path, Path]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--prepare-only", type=Path, help="Validate/apply adapter to an existing pinned source checkout; no OCI or ISO operations")
+    args = parser.parse_args()
     try:
+        if args.prepare_only is not None:
+            prepare_upstream_adapter(args.prepare_only)
+            print("Prepared exact official installer source; configurator/dashboard unchanged; no guest acceptance claimed")
+            return 0
         iso, checksum = build()
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

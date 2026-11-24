@@ -78,6 +78,9 @@ jobs:
           PATH="$testbin:$PATH" python3 -m unittest discover \
             -t "$upstream" -s "$upstream/test/unit"
 
+      - name: Apply native backend to exact upstream without changing its UI
+        run: python3 scripts/omarchy_quattro_build.py --prepare-only "$RUNNER_TEMP/omarchy-iso"
+
   accepted-image-input:
     runs-on: ubuntu-24.04
     outputs:
@@ -122,7 +125,10 @@ jobs:
       - name: Install ISO build and VM dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y golang-go podman qemu-system-x86 qemu-utils ovmf socat imagemagick tesseract-ocr tesseract-ocr-eng xorriso jq git
+          sudo apt-get install -y acl golang-go podman qemu-system-x86 qemu-utils ovmf socat imagemagick tesseract-ocr tesseract-ocr-eng xorriso jq git
+          test -c /dev/kvm
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Install Cosign
@@ -170,7 +176,6 @@ jobs:
           sed -i \
             's/omarchy-pkg-add qemu-full edk2-ovmf socat imagemagick tesseract tesseract-data-eng/sudo apt-get update \&\& sudo apt-get install -y qemu-system-x86 qemu-utils ovmf socat imagemagick tesseract-ocr tesseract-ocr-eng/' \
             "$harness"
-          sed -i 's/-cpu host -enable-kvm -machine q35,accel=kvm/-cpu max -machine q35,accel=tcg,thread=multi/' "$harness"
 
       - name: Install Quattro ISO into a QEMU VM
         run: |
