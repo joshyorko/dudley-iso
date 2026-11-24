@@ -126,6 +126,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y acl podman qemu-system-x86 qemu-utils ovmf socat imagemagick tesseract-ocr tesseract-ocr-eng xorriso jq git
+          if ! command -v magick >/dev/null; then
+            printf '%s\n' '#!/usr/bin/env bash' 'exec /usr/bin/convert "$@"' | sudo tee /usr/local/bin/magick >/dev/null
+            sudo chmod 0755 /usr/local/bin/magick
+          fi
           test -c /dev/kvm
           sudo setfacl -m "u:$(id -un):rw" /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
@@ -215,6 +219,12 @@ jobs:
         run: |
           cd output/omarchy-quattro/upstream-harness
           ./bin/omarchy-iso-test ../omarchy-quattro.iso --install-only --no-preview --timeout 14400
+
+      - name: Run installed-system desktop acceptance
+        run: |
+          cd output/omarchy-quattro/upstream-harness
+          test -s test-runs/omarchy-quattro/base.qcow2
+          ./bin/omarchy-iso-test ../omarchy-quattro.iso --reuse-base --no-preview --timeout 14400
 
       - name: Upload ISO, checksum, and VM evidence
         if: always()

@@ -152,10 +152,9 @@ def _run_embedded(ctx: InstallContext, *args: str) -> subprocess.CompletedProces
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
-        if os.environ.get("OMARCHY_INSTALL_DEBUG") == "1":
-            ctx.log_path.parent.mkdir(parents=True, exist_ok=True)
-            with ctx.log_path.open("a", encoding="utf-8") as log:
-                log.write(result.stdout + result.stderr)
+        ctx.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with ctx.log_path.open("a", encoding="utf-8") as log:
+            log.write(result.stdout + result.stderr)
         raise RuntimeError("native composefs image deployment failed")
     return result
 

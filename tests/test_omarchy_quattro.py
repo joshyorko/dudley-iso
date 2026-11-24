@@ -109,6 +109,8 @@ def test_upstream_pin_is_current_live_quattro_revision() -> None:
     assert "Verify and record build receipts" in workflow
     assert "cd output/omarchy-quattro && sha256sum --check omarchy-quattro.iso.sha256" in workflow
     assert "--install-only --no-preview" in workflow
+    assert "--reuse-base --no-preview" in workflow
+    assert "Run installed-system desktop acceptance" in workflow
     assert "--encrypt" not in workflow
     assert "--provision" not in workflow
 
