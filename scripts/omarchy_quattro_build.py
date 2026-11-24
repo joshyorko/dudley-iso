@@ -270,10 +270,12 @@ def build() -> tuple[Path, Path]:
         os.replace(staged_signature, OUTPUT_SIGNATURE)
         (OUTPUT_DIR / "omarchy-quattro.iso.receipt.json").write_text(json.dumps({
             "schema": "dudley.quattro-prototype-iso/v1",
-            "builder_source_sha": os.environ.get("GITHUB_SHA", _run(["git", "rev-parse", "HEAD"], capture=True).strip()),
+            "builder_source_sha": os.environ.get("QUATTRO_SOURCE_SHA") or os.environ.get("GITHUB_SHA") or _run(
+                ["git", "-c", f"safe.directory={REPO}", "rev-parse", "HEAD"], capture=True).strip(),
             "upstream_revision": UPSTREAM_REVISION, "payload_source_sha": source_sha,
             "image_ref": source_ref, "tracking_ref": config["tracking_ref"],
-            "iso_sha256": checksum, "run_id": os.environ.get("GITHUB_RUN_ID"),
+            "iso_sha256": checksum, "run_id": os.environ.get("QUATTRO_RUN_ID") or os.environ.get("GITHUB_RUN_ID"),
+            "job": os.environ.get("GITHUB_JOB", "harvester-build"),
             "qualification": "prototype only; actual UI/install/desktop and encryption gates pending",
         }, indent=2) + "\n")
     return OUTPUT_ISO, OUTPUT_SHA256

@@ -128,6 +128,7 @@ def test_upstream_pin_is_current_live_quattro_revision() -> None:
     assert "builder/build-iso.sh" in patch
     assert "OMARCHY_INSTALL_BACKEND" in patch
     assert 'docker.io/archlinux/archlinux:latest' in patch
+    assert 'DOCKER_ARGS+=(--network=host)' in patch
     workflow = (REPO / ".github/workflows/quattro-install-e2e.yml").read_text()
     assert "pinned-upstream-unit" in workflow
     assert 'for test in "$upstream"/test/unit/*-test.sh' in workflow
@@ -138,7 +139,9 @@ def test_upstream_pin_is_current_live_quattro_revision() -> None:
     assert "--install-only --no-preview" in workflow
     assert "--reuse-base --no-preview" in workflow
     assert "Run installed-system desktop acceptance" in workflow
-    assert 'sudo env "PATH=$PATH" "$(command -v just)" iso omarchy-quattro' in workflow
+    assert 'sudo env "PATH=$PATH"' in workflow
+    assert '"GITHUB_SHA=$GITHUB_SHA"' in workflow
+    assert '"$(command -v just)" iso omarchy-quattro' in workflow
     assert "--encrypt" not in workflow
     assert "--provision" not in workflow
 

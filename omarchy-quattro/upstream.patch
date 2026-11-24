@@ -23,7 +23,10 @@ index 5dbbeff..e2a1bfd 100755
 +CONTAINER_RUNTIME="${OMARCHY_CONTAINER_RUNTIME:-docker}"
 +DOCKER=("$CONTAINER_RUNTIME")
 +if [[ $CONTAINER_RUNTIME == docker ]] && ! docker version &>/dev/null; then
-@@ -169 +183 @@ fi
+@@ -169 +183,4 @@ fi
++if [[ $CONTAINER_RUNTIME == podman ]]; then
++  DOCKER_ARGS+=(--network=host)
++fi
 -"${DOCKER[@]}" run "${DOCKER_ARGS[@]}" archlinux/archlinux:latest /$BUILD_SCRIPT
 +"${DOCKER[@]}" run "${DOCKER_ARGS[@]}" docker.io/archlinux/archlinux:latest /$BUILD_SCRIPT
 diff --git a/builder/build-iso.sh b/builder/build-iso.sh
