@@ -90,7 +90,14 @@ index 9b6ebf5..b3978af 100644
 +        from .bootc_backend import build_phases as build_bootc_phases
 +        return build_bootc_phases(ctx)
 +
-@@ -107,0 +114,3 @@ def main() -> int:
+@@ -91 +96,5 @@ def main() -> int:
+-            run(ctx, build_phases(ctx))
++            if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":
++                from .bootc_backend import seal_native_filesystem
++                run(ctx, build_phases(ctx), seal=("Finalizing native filesystem", seal_native_filesystem))
++            else:
++                run(ctx, build_phases(ctx))
+@@ -107,0 +117,3 @@ def main() -> int:
 +        if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":
 +            from .bootc_backend import cleanup_native_view
 +            cleanup_native_view(ctx)
@@ -102,3 +109,33 @@ diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py 
 +    # Root and user finalization must not prepare a mutable pacstrap target.
 +    if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":
 +        return
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases.py
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases.py
+@@ -24 +24,6 @@
+-def run(ctx: InstallContext, phases: list[tuple[str, PhaseFn]]) -> None:
++def run(
++    ctx: InstallContext, phases: list[tuple[str, PhaseFn]],
++    *, seal: tuple[str, PhaseFn] | None = None,
++) -> None:
++    if seal is not None:
++        phases = [*phases, seal]
+@@ -47,0 +53,6 @@
++            if seal is not None and index == len(phases) - 1:
++                # The native seal remounts the target read-only. Persist the
++                # measured setup phases while the installed log is writable.
++                state["installed_packages"] = _installed_package_count(ctx.target)
++                state["expected_packages"] = _expected_package_count()
++                _write_install_timing(ctx, state)
+@@ -72,2 +83,3 @@
+-    state["installed_packages"] = _installed_package_count(ctx.target)
+-    state["expected_packages"] = _expected_package_count()
++    if seal is None:
++        state["installed_packages"] = _installed_package_count(ctx.target)
++        state["expected_packages"] = _expected_package_count()
+@@ -75,0 +88,5 @@
++    if seal is None:
++        _write_install_timing(ctx, state)
++
++
++def _write_install_timing(ctx: InstallContext, state: dict) -> None:

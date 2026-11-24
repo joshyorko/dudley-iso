@@ -238,7 +238,7 @@ def cleanup_native_view(ctx: InstallContext) -> None:
     del ctx.state["native_physical_target"]
 
 
-def _finish_native_filesystem(ctx: InstallContext) -> None:
+def seal_native_filesystem(ctx: InstallContext) -> None:
     cleanup_native_view(ctx)
     subprocess.run([*ctx.state["omarchy_bootc_runtime_command"], "image", "rm", "--force",
                     ctx.state["omarchy_bootc_runtime_id"]], check=True, capture_output=True, text=True)
@@ -436,5 +436,4 @@ def build_phases(ctx: InstallContext):
         ("Configuring Tailscale", configure_tailscale),
         ("Configuring DNS resolver", configure_dns_resolver),
         ("Validating boot setup", _validate_boot),
-        ("Finalizing native filesystem", _finish_native_filesystem),
     ]

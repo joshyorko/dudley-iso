@@ -162,11 +162,12 @@ def prepare_upstream_adapter(source_dir: Path) -> None:
                          (REPO / "omarchy-quattro/native_contract.py", "native_contract.py")]:
         shutil.copy2(source, directory / name)
         ast.parse((directory / name).read_text())
-    for name in ("main.py", "phases_impl.py"):
+    for name in ("main.py", "phases.py", "phases_impl.py"):
         ast.parse((directory / name).read_text())
     changed = set(_run(["git", "diff", "--name-only"], cwd=source_dir, capture=True).splitlines())
     allowed = {"bin/omarchy-iso-make", "builder/build-iso.sh", "configs/airootfs/root/.automated_script.sh",
                "configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py",
+               "configs/airootfs/usr/share/omarchy-iso/orchestrator/phases.py",
                "configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py"}
     if changed - allowed or any((source_dir / name).read_bytes() != data for name, data in originals.items()):
         raise ValueError("adapter modified an official UI surface outside the deployment seam")
