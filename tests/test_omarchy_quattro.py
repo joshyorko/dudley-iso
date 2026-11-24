@@ -33,6 +33,8 @@ def test_probe_mounts_work_under_existing_container_run_directory() -> None:
     assert 'oci-archive:/run/quattro-probe/source.oci.tar' in probe
     assert '--skip-finalize /run/quattro-probe/target' in probe
     assert '-v "$work:$work:rshared"' not in probe
+    assert probe.index('udevadm trigger --action=change') > probe.index('mkfs.btrfs')
+    assert probe.rindex('udevadm settle') < probe.index('"${podman[@]}" run')
 
 
 @pytest.mark.parametrize("tampered", [False, True])

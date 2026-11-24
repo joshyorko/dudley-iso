@@ -52,6 +52,10 @@ loop=$(sudo -n losetup --find --show --partscan "$work/disk.raw")
 sudo -n udevadm settle
 sudo -n mkfs.vfat -F 32 "${loop}p1"
 sudo -n mkfs.btrfs -f "${loop}p2"
+sudo -n udevadm trigger --action=change "/sys/class/block/${loop##*/}p1" "/sys/class/block/${loop##*/}p2"
+sudo -n udevadm settle
+sudo -n lsblk --json --output NAME,FSTYPE,UUID,PARTUUID "${loop}p2" | tee "$PROBE_OUTPUT/root-device.json" >/dev/null
+test -n "$(jq -er '.blockdevices[0].uuid // empty' "$PROBE_OUTPUT/root-device.json")"
 mkdir "$work/target"
 sudo -n mount "${loop}p2" "$work/target"
 sudo -n mkdir -p "$work/target/boot/efi"
