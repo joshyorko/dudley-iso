@@ -44,6 +44,8 @@ IMAGE_REF_FILE = Path("/root/omarchy_bootc_image_ref")
 TRACKING_REF_FILE = Path("/root/omarchy_bootc_target_imgref")
 ARCHIVE_CHECKSUM = EMBEDDED_ARCHIVE.with_suffix(EMBEDDED_ARCHIVE.suffix + ".sha256")
 SIGNATURE_RECEIPT = EMBEDDED_ARCHIVE.with_suffix(EMBEDDED_ARCHIVE.suffix + ".signature.json")
+CONTAINER_TARGET = Path("/run/omarchy-bootc/target")
+RUNTIME_DISK = Path("/var/lib/omarchy-installer-disk")
 
 
 def verify_embedded_image(ctx: InstallContext) -> None:
@@ -108,9 +110,22 @@ def verify_embedded_image(ctx: InstallContext) -> None:
 def _load_embedded_runtime(ctx: InstallContext) -> None:
     if not ctx.state.get("omarchy_bootc_archive_verified"):
         raise RuntimeError("embedded archive was not verified before target preparation")
-    store = _sysroot_path(ctx, ".omarchy-installer-storage")
-    if store.exists():
-        raise RuntimeError("target already contains an installer runtime store")
+    source = subprocess.run(
+        ["findmnt", "--noheadings", "--raw", "--nofsroot", "--output", "SOURCE,FSTYPE",
+         "--mountpoint", str(ctx.target)],
+        check=True, capture_output=True, text=True,
+    ).stdout.split()
+    if len(source) != 2 or source[1] != "btrfs" or not source[0].startswith("/dev/"):
+        raise RuntimeError("native installer runtime requires the selected Btrfs root device")
+    if RUNTIME_DISK.is_symlink() or RUNTIME_DISK.is_mount():
+        raise RuntimeError("a previous installer runtime disk is still mounted")
+    RUNTIME_DISK.mkdir(mode=0o700, parents=True, exist_ok=True)
+    subprocess.run(["mount", "-t", "btrfs", "-o", "subvolid=5", source[0], str(RUNTIME_DISK)], check=True)
+    subprocess.run(["mount", "--make-private", str(RUNTIME_DISK)], check=True)
+    # Keep storage on the selected disk, but outside bootc's empty deployment root.
+    store = RUNTIME_DISK / ".omarchy-installer-storage"
+    if store.exists() or store.is_symlink():
+        raise RuntimeError("selected disk already contains an installer runtime store")
     store.mkdir(mode=0o700)
     temporary = store / "tmp"
     temporary.mkdir(mode=0o700)
@@ -136,6 +151,9 @@ def _load_embedded_runtime(ctx: InstallContext) -> None:
     )
     if inspect.returncode or "sha256:" + inspect.stdout.strip().removeprefix("sha256:") != runtime_id:
         raise RuntimeError("loaded runtime config does not match accepted archive manifest")
+    scratch = store / "bootc-tmp"
+    scratch.mkdir(mode=0o700)
+    subprocess.run(["mount", "--bind", str(scratch), "/var/tmp"], check=True)
     ctx.state["omarchy_bootc_image_loaded"] = True
 
 
@@ -155,13 +173,15 @@ def _run_embedded(ctx: InstallContext, *args: str) -> subprocess.CompletedProces
         raise RuntimeError("future tracking ref must be supplied separately from the accepted source digest")
     runtime_dir = Path("/run/omarchy-bootc")
     runtime_dir.mkdir(parents=True, exist_ok=True)
+    CONTAINER_TARGET.mkdir(parents=True, exist_ok=True)
     command = [
         *ctx.state["omarchy_bootc_runtime_command"], "run", "--rm", "--privileged", "--pid=host", "--ipc=host",
         "--userns=host", "--network=host", "--security-opt", "label=disable",
         "--volume", "/dev:/dev", "--volume", "/run:/run", "--volume", "/sys:/sys:ro",
         "--volume", "/var/lib/containers:/var/lib/containers",
-        "--volume", f"{ctx.target}:{ctx.target}:rshared",
+        "--volume", "/var/tmp:/var/tmp",
         "--volume", f"{runtime_dir}:{runtime_dir}:rshared",
+        "--volume", f"{ctx.target}:{CONTAINER_TARGET}:rshared",
         "--volume", f"{EMBEDDED_ARCHIVE}:/run/omarchy-bootc/quattro.oci.tar:ro",
         ctx.state["omarchy_bootc_runtime_id"],
         *args,
@@ -171,6 +191,9 @@ def _run_embedded(ctx: InstallContext, *args: str) -> subprocess.CompletedProces
         ctx.log_path.parent.mkdir(parents=True, exist_ok=True)
         with ctx.log_path.open("a", encoding="utf-8") as log:
             log.write(result.stdout + result.stderr)
+        evidence = _sysroot_path(ctx, ".omarchy-installer-evidence")
+        evidence.mkdir(mode=0o700, exist_ok=True)
+        (evidence / "native-deployment.log").write_text(result.stdout + result.stderr)
         raise RuntimeError("native composefs image deployment failed")
     return result
 
@@ -182,7 +205,7 @@ def _prepare_native_view(ctx: InstallContext) -> None:
     view.mkdir(parents=True, exist_ok=True)
     if view.is_mount():
         raise RuntimeError("a previous native installer root is still mounted")
-    _run_embedded(ctx, "/usr/lib/bootc/initramfs-setup", "--sysroot", str(physical),
+    _run_embedded(ctx, "/usr/lib/bootc/initramfs-setup", "--sysroot", str(CONTAINER_TARGET),
                   "--target", str(view), "--cmdline", cmdline)
     try:
         deployment = cmdline.removeprefix("composefs=").removeprefix("?")
@@ -219,7 +242,9 @@ def _finish_native_filesystem(ctx: InstallContext) -> None:
     cleanup_native_view(ctx)
     subprocess.run([*ctx.state["omarchy_bootc_runtime_command"], "image", "rm", "--force",
                     ctx.state["omarchy_bootc_runtime_id"]], check=True, capture_output=True, text=True)
+    subprocess.run(["umount", "/var/tmp"], check=True)
     shutil.rmtree(ctx.state["omarchy_bootc_runtime_store"])
+    subprocess.run(["umount", str(RUNTIME_DISK)], check=True)
     ctx.state["omarchy_bootc_image_loaded"] = False
     _finalize_native_filesystem(ctx.target)
 
@@ -269,7 +294,7 @@ def _install_system(ctx: InstallContext) -> None:
             "--composefs-backend",
             "--skip-fetch-check",
             "--skip-finalize",
-            str(ctx.target),
+            str(CONTAINER_TARGET),
         )
 
         fstab = subprocess.run(["genfstab", "-U", str(ctx.target)], check=True,

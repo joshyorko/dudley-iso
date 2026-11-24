@@ -132,6 +132,28 @@ def test_runtime_import_is_after_mounting_the_verified_target_disk():
     assert "installer.sanity_check(skip_ntp=True, skip_wkd=True)" in backend
 
 
+def test_runtime_store_is_outside_the_empty_deployment_root():
+    backend = (REPO / "omarchy-quattro/bootc_backend.py").read_text()
+    load = backend.split("def _load_embedded_runtime", 1)[1].split("\ndef ", 1)[0]
+    assert '_sysroot_path(ctx, ".omarchy-installer-storage")' not in load
+    assert '"--nofsroot"' in load and '"--mountpoint", str(ctx.target)' in load
+    assert '"subvolid=5"' in load
+    assert '"--make-private"' in load
+    assert 'RUNTIME_DISK = Path("/var/lib/omarchy-installer-disk")' in backend
+    finish = backend.split("def _finish_native_filesystem", 1)[1].split("\ndef ", 1)[0]
+    assert finish.index('"umount", str(RUNTIME_DISK)') < finish.index("_finalize_native_filesystem")
+
+
+def test_bootc_archive_scratch_uses_the_selected_disk_in_both_namespaces():
+    backend = (REPO / "omarchy-quattro/bootc_backend.py").read_text()
+    load = backend.split("def _load_embedded_runtime", 1)[1].split("\ndef ", 1)[0]
+    assert '["mount", "--bind", str(scratch), "/var/tmp"]' in load
+    run = backend.split("def _run_embedded", 1)[1].split("\ndef ", 1)[0]
+    assert '"--volume", "/var/tmp:/var/tmp"' in run
+    finish = backend.split("def _finish_native_filesystem", 1)[1].split("\ndef ", 1)[0]
+    assert finish.index('["umount", "/var/tmp"]') < finish.index("shutil.rmtree")
+
+
 def test_native_target_uses_the_deployment_and_bootcs_exact_verity_policy(tmp_path):
     deployment = "a" * 128
     (tmp_path / "state/deploy" / deployment / "etc").mkdir(parents=True)
@@ -268,6 +290,9 @@ def test_native_accounts_use_bootcs_composed_root_and_persistent_state() -> None
     assert backend.index("_prepare_native_view(ctx)") < backend.index("installer.create_users(")
     assert 'ctx.state["native_physical_target"]' in backend
     assert "_finish_native_filesystem" in backend
+    assert 'CONTAINER_TARGET = Path("/run/omarchy-bootc/target")' in backend
+    assert 'f"{ctx.target}:{ctx.target}:rshared"' not in backend
+    assert '"--sysroot", str(CONTAINER_TARGET)' in backend
 
 
 def test_native_contract_rejects_encryption_before_live_preparation() -> None:
