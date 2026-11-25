@@ -1,0 +1,141 @@
+diff --git a/bin/omarchy-iso-make b/bin/omarchy-iso-make
+index 5dbbeff..e2a1bfd 100755
+--- a/bin/omarchy-iso-make
++++ b/bin/omarchy-iso-make
+@@ -127,0 +128,4 @@ DOCKER_ARGS=(
++  -e "OMARCHY_INSTALL_BACKEND=${OMARCHY_INSTALL_BACKEND:-}"
++  -e "OMARCHY_BOOTC_IMAGE_REF=${OMARCHY_BOOTC_IMAGE_REF:-}"
++  -e "OMARCHY_BOOTC_TARGET_IMGREF=${OMARCHY_BOOTC_TARGET_IMGREF:-}"
++  -e "OMARCHY_BOOTC_IMAGE_SIGNATURE_RECEIPT=${OMARCHY_BOOTC_IMAGE_SIGNATURE_RECEIPT:-}"
+@@ -137,0 +142,9 @@ DOCKER_ARGS=(
++if [[ -n ${OMARCHY_BOOTC_IMAGE_ARCHIVE:-} ]]; then
++  [[ -f $OMARCHY_BOOTC_IMAGE_ARCHIVE ]] || { echo "ERROR: missing OCI archive: $OMARCHY_BOOTC_IMAGE_ARCHIVE" >&2; exit 1; }
++  DOCKER_ARGS+=(-v "$OMARCHY_BOOTC_IMAGE_ARCHIVE:/omarchy-bootc-image.oci.tar:ro")
++fi
++if [[ -n ${OMARCHY_BOOTC_IMAGE_SIGNATURE_RECEIPT:-} ]]; then
++  [[ -f $OMARCHY_BOOTC_IMAGE_SIGNATURE_RECEIPT ]] || { echo "ERROR: missing image signature receipt: $OMARCHY_BOOTC_IMAGE_SIGNATURE_RECEIPT" >&2; exit 1; }
++  DOCKER_ARGS+=(-v "$OMARCHY_BOOTC_IMAGE_SIGNATURE_RECEIPT:/omarchy-bootc-image.signature.json:ro")
++fi
++
+@@ -164,2 +177,3 @@ fi
+-DOCKER=(docker)
+-if ! docker version &>/dev/null; then
++CONTAINER_RUNTIME="${OMARCHY_CONTAINER_RUNTIME:-docker}"
++DOCKER=("$CONTAINER_RUNTIME")
++if [[ $CONTAINER_RUNTIME == docker ]] && ! docker version &>/dev/null; then
+@@ -169 +183,4 @@ fi
++if [[ $CONTAINER_RUNTIME == podman ]]; then
++  DOCKER_ARGS+=(--network=host)
++fi
+-"${DOCKER[@]}" run "${DOCKER_ARGS[@]}" archlinux/archlinux:latest /$BUILD_SCRIPT
++"${DOCKER[@]}" run "${DOCKER_ARGS[@]}" docker.io/archlinux/archlinux:latest /$BUILD_SCRIPT
+diff --git a/builder/build-iso.sh b/builder/build-iso.sh
+index aa2feb3..c3c4015 100755
+--- a/builder/build-iso.sh
++++ b/builder/build-iso.sh
+@@ -69,0 +70,17 @@ echo "$OMARCHY_ISO_REF" > "$build_cache_dir/airootfs/root/omarchy_iso_ref"
++
++if [[ ${OMARCHY_INSTALL_BACKEND:-} == bootc ]]; then
++  : "${OMARCHY_BOOTC_IMAGE_REF:?missing accepted bootc image digest}"
++  : "${OMARCHY_BOOTC_TARGET_IMGREF:?missing bootc tracking ref}"
++  [[ -f /omarchy-bootc-image.oci.tar ]] || { echo 'ERROR: missing bootc OCI archive' >&2; exit 1; }
++  install -D -m 0644 /omarchy-bootc-image.oci.tar \
++    "$build_cache_dir/airootfs/var/cache/omarchy/bootc/quattro.oci.tar"
++  [[ -f /omarchy-bootc-image.signature.json ]] || { echo 'ERROR: missing image signature receipt' >&2; exit 1; }
++  install -D -m 0644 /omarchy-bootc-image.signature.json \
++    "$build_cache_dir/airootfs/var/cache/omarchy/bootc/quattro.oci.tar.signature.json"
++  sha256sum "$build_cache_dir/airootfs/var/cache/omarchy/bootc/quattro.oci.tar" \
++    | awk '{print $1 "  quattro.oci.tar"}' \
++    >"$build_cache_dir/airootfs/var/cache/omarchy/bootc/quattro.oci.tar.sha256"
++  printf '%s\n' bootc >"$build_cache_dir/airootfs/root/omarchy_install_backend"
++  printf '%s\n' "$OMARCHY_BOOTC_IMAGE_REF" >"$build_cache_dir/airootfs/root/omarchy_bootc_image_ref"
++  printf '%s\n' "$OMARCHY_BOOTC_TARGET_IMGREF" >"$build_cache_dir/airootfs/root/omarchy_bootc_target_imgref"
++fi
+@@ -121,0 +139,3 @@ arch_packages=(linux-t2 git gum jq openssl plymouth ttfx tzupdate omarchy-keyrin
++if [[ ${OMARCHY_INSTALL_BACKEND:-} == bootc ]]; then
++  arch_packages+=(podman skopeo btrfs-progs)
++fi
+@@ -225,0 +246,6 @@ fi
++if [[ ${OMARCHY_INSTALL_BACKEND:-} == bootc ]]; then
++  # The signed bootc image supplies target packages; mirror only the official live closure.
++  mapfile -t all_packages < <(
++    awk 'NF && $1 !~ /^#/ {print $1}' "$build_cache_dir/packages.x86_64" | sort -u
++  )
++fi
+@@ -338,0 +365,2 @@ resolve_expected_packages() {
++# Native deployment validates the signed image, not a pacstrap target closure.
++if [[ ${OMARCHY_INSTALL_BACKEND:-} != bootc ]]; then
+@@ -354,0 +383 @@ fi
++fi
+diff --git a/configs/airootfs/root/.automated_script.sh b/configs/airootfs/root/.automated_script.sh
+index 16904f8..67ef9f4 100644
+--- a/configs/airootfs/root/.automated_script.sh
++++ b/configs/airootfs/root/.automated_script.sh
+@@ -26,0 +27,7 @@ export OMARCHY_INSTALL_LOG_FILE=/var/log/omarchy-install.log
++if [[ -f /root/omarchy_install_backend ]]; then
++  export OMARCHY_INSTALL_BACKEND="$(< /root/omarchy_install_backend)"
++  export OMARCHY_BOOTC_IMAGE_REF="$(< /root/omarchy_bootc_image_ref)"
++  export OMARCHY_BOOTC_TARGET_IMGREF="$(< /root/omarchy_bootc_target_imgref)"
++  export OMARCHY_BOOTC_IMAGE_ARCHIVE=/var/cache/omarchy/bootc/quattro.oci.tar
++  export OMARCHY_BOOTC_IMAGE_SIGNATURE_RECEIPT=/var/cache/omarchy/bootc/quattro.oci.tar.signature.json
++fi
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
+index 9b6ebf5..b3978af 100644
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/main.py
+@@ -13,0 +14 @@ import sys
++import os
+@@ -30,0 +32,4 @@ def build_phases(ctx: InstallContext):
++    if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":
++        from .bootc_backend import build_phases as build_bootc_phases
++        return build_bootc_phases(ctx)
++
+@@ -91 +96,5 @@ def main() -> int:
+-            run(ctx, build_phases(ctx))
++            if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":
++                from .bootc_backend import seal_native_filesystem
++                run(ctx, build_phases(ctx), seal=("Finalizing native filesystem", seal_native_filesystem))
++            else:
++                run(ctx, build_phases(ctx))
+@@ -107,0 +117,3 @@ def main() -> int:
++        if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":
++            from .bootc_backend import cleanup_native_view
++            cleanup_native_view(ctx)
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases_impl.py
+@@ -1011,0 +1012,4 @@ def _prepare_target_setup(ctx: InstallContext) -> None:
++    # The native image supplies its package configuration and runtime tools.
++    # Root and user finalization must not prepare a mutable pacstrap target.
++    if os.environ.get("OMARCHY_INSTALL_BACKEND") == "bootc":
++        return
+diff --git a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases.py b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases.py
+--- a/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases.py
++++ b/configs/airootfs/usr/share/omarchy-iso/orchestrator/phases.py
+@@ -24 +24,6 @@
+-def run(ctx: InstallContext, phases: list[tuple[str, PhaseFn]]) -> None:
++def run(
++    ctx: InstallContext, phases: list[tuple[str, PhaseFn]],
++    *, seal: tuple[str, PhaseFn] | None = None,
++) -> None:
++    if seal is not None:
++        phases = [*phases, seal]
+@@ -47,0 +53,6 @@
++            if seal is not None and index == len(phases) - 1:
++                # The native seal remounts the target read-only. Persist the
++                # measured setup phases while the installed log is writable.
++                state["installed_packages"] = _installed_package_count(ctx.target)
++                state["expected_packages"] = _expected_package_count()
++                _write_install_timing(ctx, state)
+@@ -72,2 +83,3 @@
+-    state["installed_packages"] = _installed_package_count(ctx.target)
+-    state["expected_packages"] = _expected_package_count()
++    if seal is None:
++        state["installed_packages"] = _installed_package_count(ctx.target)
++        state["expected_packages"] = _expected_package_count()
+@@ -75,0 +88,5 @@
++    if seal is None:
++        _write_install_timing(ctx, state)
++
++
++def _write_install_timing(ctx: InstallContext, state: dict) -> None:

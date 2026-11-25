@@ -1,0 +1,300 @@
+name: Quattro ISO and VM install
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-upstream-unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Dudley contracts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Run pinned upstream fast tests
+        run: |
+          upstream="$RUNNER_TEMP/omarchy-iso"
+          git clone --filter=blob:none --branch quattro --single-branch --no-checkout \
+            "$(cat omarchy-quattro/upstream_url)" "$upstream"
+          git -C "$upstream" checkout --detach "$(cat omarchy-quattro/upstream_revision)"
+          git -C "$upstream" submodule update --init --recursive
+          cd "$upstream"
+          # The upstream suite calls host-localectl and systemd-firstboot. The
+          # hosted runner is not booted with systemd, so provide only the
+          # deterministic command surface those unit tests exercise.
+          testbin="$RUNNER_TEMP/omarchy-iso-test-bin"
+          mkdir -p "$testbin"
+          cat >"$testbin/localectl" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "${1:-}" in
+            --no-pager)
+              [[ "${2:-}" == list-keymaps ]] || exit 1
+              printf '%s\n' us uk de fr es
+              ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 0755 "$testbin/localectl"
+          cat >"$testbin/systemd-firstboot" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          /usr/bin/systemd-firstboot "$@"
+          root=/
+          keymap=
+          for arg in "$@"; do
+            case "$arg" in
+              --root=*) root=${arg#--root=} ;;
+              --keymap=*) keymap=${arg#--keymap=} ;;
+            esac
+          done
+          if [[ -n "$keymap" && -f "$root/etc/vconsole.conf" ]] &&
+             ! grep -q '^XKBLAYOUT=' "$root/etc/vconsole.conf"; then
+            printf 'XKBLAYOUT=%s\n' "$keymap" >>"$root/etc/vconsole.conf"
+          fi
+          EOF
+          chmod 0755 "$testbin/systemd-firstboot"
+          # Keep the upstream fast-suite ordering while making the Python
+          # discovery root explicit.  Some hosted clones omit the empty
+          # package marker, which makes unittest reject test/unit as a start
+          # directory even though the checked-out suite is otherwise intact.
+          # Ubuntu ships a stdlib ``test`` package; make the checked-out
+          # upstream namespace an explicit package so discovery cannot import
+          # that unrelated module instead.
+          for package in "$upstream/test/__init__.py" "$upstream/test/unit/__init__.py"; do
+            if [[ ! -e "$package" ]]; then
+              : >"$package"
+            fi
+          done
+          for test in "$upstream"/test/unit/*-test.sh; do
+            printf '==> %s\n' "${test#"$upstream/"}"
+            bash "$test"
+          done
+          printf '==> test/unit/test_*.py\n'
+          PATH="$testbin:$PATH" python3 -m unittest discover \
+            -t "$upstream" -s "$upstream/test/unit"
+
+      - name: Apply native backend to exact upstream without changing its UI
+        run: python3 scripts/omarchy_quattro_build.py --prepare-only "$RUNNER_TEMP/omarchy-iso"
+
+  accepted-image-input:
+    runs-on: ubuntu-24.04
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check accepted OS image input
+        id: check
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+          config = json.loads(Path("omarchy-quattro/image.json").read_text())
+          accepted = config["accepted_source_ref"]
+          if not accepted:
+              print("Quattro ISO build and VM install skipped: accepted OS digest is not yet reviewed.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write("ready=false\n")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  summary.write("Quattro ISO build and VM install skipped: accepted OS digest is not yet reviewed.\n")
+              raise SystemExit(0)
+          if not re.fullmatch(r"ghcr\.io/joshyorko/omarchy-bootc@sha256:[0-9a-f]{64}", accepted):
+              raise SystemExit("accepted_source_ref must be an exact ghcr.io digest")
+          if not config["accepted_signer_identity"] or not config["accepted_signer_oidc_issuer"]:
+              raise SystemExit("keyless signer identity and issuer must be configured")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("ready=true\n")
+          PY
+
+  build-and-install:
+    needs: [accepted-image-input, pinned-upstream-unit, native-deployment-probe]
+    if: needs.accepted-image-input.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install ISO build and VM dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y acl podman qemu-system-x86 qemu-utils ovmf socat imagemagick tesseract-ocr tesseract-ocr-eng xorriso jq git
+          if ! command -v magick >/dev/null; then
+            printf '%s\n' '#!/usr/bin/env bash' 'exec /usr/bin/convert "$@"' | sudo tee /usr/local/bin/magick >/dev/null
+            sudo chmod 0755 /usr/local/bin/magick
+          fi
+          test -c /dev/kvm
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+        with:
+          cosign-release: v2.6.0
+
+      - name: Install just
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+
+      - name: Build offline Quattro ISO
+        run: |
+          sudo env "PATH=$PATH" "GITHUB_SHA=$GITHUB_SHA" \
+            "GITHUB_RUN_ID=$GITHUB_RUN_ID" "GITHUB_JOB=$GITHUB_JOB" \
+            "$(command -v just)" iso omarchy-quattro
+          sudo chown --no-dereference "$(id -u):$(id -g)" output output/omarchy-quattro
+          sudo find output/omarchy-quattro -maxdepth 1 -type f -exec chown --no-dereference "$(id -u):$(id -g)" {} +
+
+      - name: Verify and record build receipts
+        run: |
+          (cd output/omarchy-quattro && sha256sum --check omarchy-quattro.iso.sha256)
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          image = json.loads(Path("omarchy-quattro/image.json").read_text())
+          receipt = json.loads(Path("output/omarchy-quattro/omarchy-quattro.image-signature.json").read_text())
+          expected = {
+              "source_ref": image["accepted_source_ref"],
+              "source_digest": image["accepted_source_ref"].rsplit("@", 1)[1],
+              "source_sha": image["accepted_source_sha"],
+              "certificate_identity": image["accepted_signer_identity"],
+              "certificate_oidc_issuer": image["accepted_signer_oidc_issuer"],
+          }
+          if any(receipt.get(key) != value for key, value in expected.items()):
+              raise SystemExit("retained image signature receipt differs from accepted build inputs")
+          if not isinstance(receipt.get("verified_signatures"), list) or not receipt["verified_signatures"]:
+              raise SystemExit("retained image signature receipt contains no verified signature")
+          PY
+          sha256sum output/omarchy-quattro/omarchy-quattro.image-signature.json
+          echo "Image signature receipt SHA-256:" >> "$GITHUB_STEP_SUMMARY"
+          sha256sum output/omarchy-quattro/omarchy-quattro.image-signature.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload first genuine ISO before VM testing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: genuine-quattro-prototype-iso-${{ github.sha }}
+          path: |
+            output/omarchy-quattro/*.iso
+            output/omarchy-quattro/*.sha256
+            output/omarchy-quattro/*.json
+          retention-days: 7
+      - name: Checkout pinned QMP capture helper
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: joshyorko/omarchy-bootc
+          ref: 65a8e151b0bb44762a8cb1b9bdebd03c3a874296
+          path: payload-contract
+          persist-credentials: false
+      - name: Boot genuine official live UI before supplying any answers
+        env:
+          CAPTURE_HELPER: ${{ github.workspace }}/payload-contract/scripts/ci/capture-vm-screen.py
+        run: bash scripts/capture-quattro-live-ui.sh output/omarchy-quattro/omarchy-quattro.iso
+      - name: Upload early raw official live UI observations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: genuine-quattro-live-ui-${{ github.sha }}
+          path: output/omarchy-quattro/interactive-live/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Prepare upstream VM install harness
+        run: |
+          mkdir -p output/omarchy-quattro/upstream-harness
+          git clone --filter=blob:none --branch quattro --single-branch --no-checkout \
+            "$(cat omarchy-quattro/upstream_url)" output/omarchy-quattro/upstream-harness
+          git -C output/omarchy-quattro/upstream-harness checkout --detach "$(cat omarchy-quattro/upstream_revision)"
+          sudo mkdir -p /usr/share/edk2/x64
+          sudo ln -sf /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/edk2/x64/OVMF_CODE.4m.fd
+          sudo ln -sf /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/edk2/x64/OVMF_VARS.4m.fd
+          harness=output/omarchy-quattro/upstream-harness/bin/omarchy-iso-test
+          sed -i \
+            's/omarchy-pkg-add qemu-full edk2-ovmf socat imagemagick tesseract tesseract-data-eng/sudo apt-get update \&\& sudo apt-get install -y qemu-system-x86 qemu-utils ovmf socat imagemagick tesseract-ocr tesseract-ocr-eng/' \
+            "$harness"
+
+      - name: Install Quattro ISO into a QEMU VM
+        run: |
+          cd output/omarchy-quattro/upstream-harness
+          ./bin/omarchy-iso-test ../omarchy-quattro.iso --install-only --no-preview --timeout 14400
+
+      - name: Resolve acceptance source from the signed payload source
+        id: suite
+        run: |
+          revision=$(sed -n 's/^ARG OMARCHY_QUATTRO_REVISION="\([0-9a-f]*\)"$/\1/p' payload-contract/Containerfile)
+          test "$revision" = "$(cat omarchy-quattro/accepted_omarchy_revision)"
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the matching upstream Omarchy acceptance suite
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: omacom/omarchy
+          ref: ${{ steps.suite.outputs.revision }}
+          path: output/omarchy-quattro/acceptance-source
+          persist-credentials: false
+
+      - name: Run installed-system desktop acceptance
+        run: |
+          output="$PWD/output/omarchy-quattro"
+          digest=$(jq -er '.accepted_source_ref | split("@")[1]' omarchy-quattro/image.json)
+          test -s "$output/upstream-harness/test-runs/omarchy-quattro/base.qcow2"
+          bash scripts/quattro-initial-desktop-smoke.sh "$output/upstream-harness" \
+            "$output/omarchy-quattro.iso" "$digest" "$output/acceptance-source"
+
+      - name: Upload ISO, checksum, and VM evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: quattro-iso-vm-evidence
+          if-no-files-found: warn
+          path: |
+            output/omarchy-quattro/omarchy-quattro.image-signature.json
+            output/omarchy-quattro/upstream-harness/test-runs/**
+            !output/omarchy-quattro/upstream-harness/test-runs/**/id_ed25519
+            !output/omarchy-quattro/upstream-harness/test-runs/**/*.qcow2
+
+  native-deployment-probe:
+    needs: pinned-upstream-unit
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - name: Checkout the signed payload source contract
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: joshyorko/omarchy-bootc
+          ref: 65a8e151b0bb44762a8cb1b9bdebd03c3a874296
+          path: payload-contract
+          persist-credentials: false
+      - uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+        with:
+          cosign-release: v2.6.0
+      - name: Verify exact signed manifest and source before privileged execution
+        run: |
+          bash payload-contract/scripts/ci/verify-published-image-trust.sh \
+            ghcr.io/joshyorko/omarchy-bootc@sha256:aca01a25953209b1e38b8aa115fe253283153f159f6f28defaede9c528476386 \
+            65a8e151b0bb44762a8cb1b9bdebd03c3a874296
+      - name: Prepare disposable runner tools
+        run: |
+          bash payload-contract/scripts/ci/prepare-ubuntu-runner.sh
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends parted dosfstools
+      - name: Probe native filesystem and provisioning view
+        env:
+          PROBE_OUTPUT: ${{ runner.temp }}/native-probe-evidence
+        run: bash scripts/probe-quattro-filesystem.sh
+      - name: Preserve only small probe diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-deployment-probe-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/native-probe-evidence/*.json
+            ${{ runner.temp }}/native-probe-evidence/*.log
+            ${{ runner.temp }}/native-probe-evidence/*.txt
+          retention-days: 14
+          if-no-files-found: warn

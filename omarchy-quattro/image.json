@@ -1,0 +1,7 @@
+{
+  "accepted_source_ref": "ghcr.io/joshyorko/omarchy-bootc@sha256:aca01a25953209b1e38b8aa115fe253283153f159f6f28defaede9c528476386",
+  "accepted_source_sha": "65a8e151b0bb44762a8cb1b9bdebd03c3a874296",
+  "tracking_ref": "ghcr.io/joshyorko/omarchy-bootc:testing",
+  "accepted_signer_identity": "https://github.com/joshyorko/omarchy-bootc/.github/workflows/build.yml@refs/heads/main",
+  "accepted_signer_oidc_issuer": "https://token.actions.githubusercontent.com"
+}

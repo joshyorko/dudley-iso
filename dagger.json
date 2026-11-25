@@ -1,0 +1,6 @@
+{
+  "name": "quattro-installer",
+  "engineVersion": "v0.20.6",
+  "sdk": { "source": "go" },
+  "source": ".dagger"
+}

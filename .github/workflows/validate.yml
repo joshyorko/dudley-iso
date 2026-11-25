@@ -24,6 +24,3 @@ jobs:
         run: |
           just --list
           pytest tests/ -q
-
-# ISO builds and install E2E remain local-only until Dudley's first completed
-# install and installed-system boot have been verified.

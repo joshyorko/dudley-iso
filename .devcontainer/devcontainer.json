@@ -1,0 +1,13 @@
+{
+  "name": "Genuine Quattro installer",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "remoteUser": "vscode",
+  "postCreateCommand": "sudo apt-get update && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 pre-commit",
+  "mounts": [
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+    "source=/home/kdlocpanda/omarchy-builds,target=/home/kdlocpanda/omarchy-builds,type=bind"
+  ],
+  "containerEnv": {
+    "_EXPERIMENTAL_DAGGER_RUNNER_HOST": "docker-container://omarchy-dagger-v0.20.6"
+  }
+}
