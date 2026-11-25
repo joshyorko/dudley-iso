@@ -71,7 +71,7 @@ jobs:
             fi
           done
           for test in "$upstream"/test/unit/*-test.sh; do
-            printf '==> %s\n' "${test#$upstream/}"
+            printf '==> %s\n' "${test#"$upstream/"}"
             bash "$test"
           done
           printf '==> test/unit/test_*.py\n'
@@ -222,11 +222,28 @@ jobs:
           cd output/omarchy-quattro/upstream-harness
           ./bin/omarchy-iso-test ../omarchy-quattro.iso --install-only --no-preview --timeout 14400
 
+      - name: Resolve acceptance source from the signed payload source
+        id: suite
+        run: |
+          revision=$(sed -n 's/^ARG OMARCHY_QUATTRO_REVISION="\([0-9a-f]*\)"$/\1/p' payload-contract/Containerfile)
+          test "$revision" = "$(cat omarchy-quattro/accepted_omarchy_revision)"
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the matching upstream Omarchy acceptance suite
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: omacom/omarchy
+          ref: ${{ steps.suite.outputs.revision }}
+          path: output/omarchy-quattro/acceptance-source
+          persist-credentials: false
+
       - name: Run installed-system desktop acceptance
         run: |
-          cd output/omarchy-quattro/upstream-harness
-          test -s test-runs/omarchy-quattro/base.qcow2
-          ./bin/omarchy-iso-test ../omarchy-quattro.iso --reuse-base --no-preview --timeout 14400
+          output="$PWD/output/omarchy-quattro"
+          digest=$(jq -er '.accepted_source_ref | split("@")[1]' omarchy-quattro/image.json)
+          test -s "$output/upstream-harness/test-runs/omarchy-quattro/base.qcow2"
+          bash scripts/quattro-initial-desktop-smoke.sh "$output/upstream-harness" \
+            "$output/omarchy-quattro.iso" "$digest" "$output/acceptance-source"
 
       - name: Upload ISO, checksum, and VM evidence
         if: always()
@@ -237,6 +254,8 @@ jobs:
           path: |
             output/omarchy-quattro/omarchy-quattro.image-signature.json
             output/omarchy-quattro/upstream-harness/test-runs/**
+            !output/omarchy-quattro/upstream-harness/test-runs/**/id_ed25519
+            !output/omarchy-quattro/upstream-harness/test-runs/**/*.qcow2
 
   native-deployment-probe:
     needs: pinned-upstream-unit

@@ -67,7 +67,14 @@ case "$phase" in
         else
             test -s "$harness/test-runs/omarchy-quattro/base.qcow2"
             digest=$(jq -er '.accepted_source_ref | split("@")[1]' "$run/source/omarchy-quattro/image.json")
-            bash "$run/source/scripts/quattro-initial-desktop-smoke.sh" "$harness" "$iso" "$digest"
+            suite="$run/acceptance-source"
+            if [[ ! -d $suite/.git ]]; then
+                git init -q "$suite"
+                git -C "$suite" fetch -q --depth=1 https://github.com/omacom/omarchy.git \
+                    "$(cat "$run/source/omarchy-quattro/accepted_omarchy_revision")"
+                git -C "$suite" checkout -q --detach FETCH_HEAD
+            fi
+            bash "$run/source/scripts/quattro-initial-desktop-smoke.sh" "$harness" "$iso" "$digest" "$suite"
         fi
         ;;
     *) exit 2 ;;

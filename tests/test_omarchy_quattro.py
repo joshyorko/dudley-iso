@@ -203,7 +203,8 @@ def test_upstream_pin_is_current_live_quattro_revision() -> None:
     assert "Verify and record build receipts" in workflow
     assert "cd output/omarchy-quattro && sha256sum --check omarchy-quattro.iso.sha256" in workflow
     assert "--install-only --no-preview" in workflow
-    assert "--reuse-base --no-preview" in workflow
+    assert 'test -s "$output/upstream-harness/test-runs/omarchy-quattro/base.qcow2"' in workflow
+    assert "--reuse-base --no-preview" in (REPO / "scripts/quattro-initial-desktop-smoke.sh").read_text()
     assert "Run installed-system desktop acceptance" in workflow
     assert 'sudo env "PATH=$PATH"' in workflow
     assert '"GITHUB_SHA=$GITHUB_SHA"' in workflow
@@ -442,3 +443,16 @@ def test_archive_export_keeps_original_registry_layers(monkeypatch, tmp_path):
         NATIVE_CONTRACT.verified_archive_config(raw + '\n', digest)
     with pytest.raises(ValueError, match='digest mismatch'):
         builder.export_verified_archive(ref.rsplit('@', 1)[0] + '@sha256:' + 'c' * 64, archive)
+
+def test_desktop_acceptance_uses_signed_payload_userspace_pin_and_full_suite():
+    workflow = (REPO / ".github/workflows/quattro-install-e2e.yml").read_text()
+    wrapper = (REPO / "scripts/quattro-initial-desktop-smoke.sh").read_text()
+    assert (REPO / "omarchy-quattro/accepted_omarchy_revision").read_text().strip() == (
+        "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
+    )
+    assert "repository: omacom/omarchy" in workflow
+    assert "scripts/quattro-initial-desktop-smoke.sh" in workflow
+    assert "apps-menu|meta_l-alt-spc|omarchy-dock-apps|omarchy.dock" in wrapper
+    assert '--sync-omarchy "$suite"' in wrapper
+    assert "shortcut_smoke_phase || status=1" in wrapper
+    assert "bash .local/share/omarchy/test/acceptance" in wrapper
